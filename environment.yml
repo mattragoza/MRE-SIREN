@@ -1,0 +1,19 @@
+name: MRE-SIREN
+channels:
+  - conda-forge
+  - pyviz
+  - defaults
+dependencies:
+  - python=3.8
+  - numpy
+  - scipy
+  - pandas
+  - matplotlib
+  - seaborn
+  - ipykernel
+  - h5py
+  - xarray
+  - panel
+  - holoviews
+  - bokeh
+prefix: /ocean/projects/asc170022p/mtragoza/.conda/envs/MRE-SIREN
