@@ -5,7 +5,7 @@ The goal of this project is to perform elasticity reconstruction for magnetic re
 ## Environment setup
 
 ```
-conda create -n MRE-SIREN --file environemnt.yml
+conda create -n MRE-SIREN --file environment.yml
 conda activate MRE-SIREN
 python -m ipykernel install --user --name=MRE-SIREN
 ```
