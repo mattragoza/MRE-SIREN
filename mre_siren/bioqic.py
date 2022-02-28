@@ -1,8 +1,51 @@
+from pathlib import Path
 import numpy as np
 import xarray as xr
-import scipy.io
-import h5py
+import h5py, scipy.io
 import matplotlib as mpl
+
+
+def ndidx(t):
+    '''
+    Return a tensor of n-dimensional
+    indices for the provided tensor.
+    '''
+    all_idx = []
+    idx = torch.arange(t.numel())
+    for size in t.shape[::-1]:
+        all_idx.append(torch.remainder(idx, size))
+        idx = torch.div(idx, size, rounding_mode='floor')
+    return torch.stack(all_idx[::-1], dim=1)
+
+
+def as_list(x):
+    '''
+    Return x in a singleton list if
+    it is not already a list object.
+    '''
+    return x if isinstance(x, list) else [x]
+
+
+class BIOQICDataset(object):
+
+    def __init__(self, data_root, verbose=False):
+        self.ds = load_bioqic_dataset(Path(data_root), verbose=verbose)
+
+    def view(self, var, scale=1):
+        import holoviews as hv
+        return hv.Layout([
+            view_xarray(
+                self.ds, hue=h, x='x', y='y',
+                cmap=phase_color_map() if 'phase' in h else magnitude_color_map(),
+                v_range=(-2*np.pi, 2*np.pi) if 'phase' in h else (0, 1000),
+                scale=scale
+            ) for h in as_list(var)
+        ])
+
+    def as_function(self, var, **kwargs):
+        import torch
+        t = torch.tensor(self.ds[var].to_numpy(), **kwargs)
+        return ndidx(t), t.reshape(-1)
 
 
 def load_mat_data(mat_file, verbose=False):
@@ -16,6 +59,7 @@ def load_mat_data(mat_file, verbose=False):
     Returns:
         Loaded data in a dict-like format.
     '''
+    mat_file = str(mat_file)
     try:
         data = scipy.io.loadmat(mat_file)
     except NotImplementedError as e:
@@ -81,14 +125,14 @@ def load_bioqic_dataset(data_root, verbose=False):
     # create xarray dataset from downloaded files
     return xr.Dataset(dict(
         magnitude_raw=xr.DataArray(data_r['magnitude'], **metadata),
-        magnitude_unwrap=xr.DataArray(data_u['magnitude'], **metadata),
-        magnitude_dejit=xr.DataArray(
+        magnitude_unwrapped=xr.DataArray(data_u['magnitude'], **metadata),
+        magnitude_dejittered=xr.DataArray(
             data_d['magnitude'].transpose(rev_axes).astype(np.float64),
             **metadata
         ),
         phase_raw=xr.DataArray(data_r['phase'], **metadata),
-        phase_unwrap=xr.DataArray(data_u['phase_unwrapped'], **metadata),
-        phase_dejit = xr.DataArray(
+        phase_unwrapped=xr.DataArray(data_u['phase_unwrapped'], **metadata),
+        phase_dejittered = xr.DataArray(
             data_d['phase_unwrap_noipd'].transpose(range(6)[::-1]),
             **metadata
         ),
@@ -158,6 +202,7 @@ def view_xarray(ds, x, y, hue, cmap, v_range, scale):
     Returns:
         A holoviews Image object.
     '''
+    import holoviews as hv
     return hv.Dataset(ds[hue]).to(hv.Image, [x, y], dynamic=True).opts(
         cmap=cmap,
         width=scale*ds.dims[x],

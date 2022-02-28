@@ -2,6 +2,7 @@ name: MRE-SIREN
 channels:
   - conda-forge
   - pyviz
+  - pytorch
   - defaults
 dependencies:
   - python=3.8
@@ -16,4 +17,5 @@ dependencies:
   - panel
   - holoviews
   - bokeh
+  - pytorch
 prefix: /ocean/projects/asc170022p/mtragoza/.conda/envs/MRE-SIREN
