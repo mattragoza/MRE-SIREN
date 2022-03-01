@@ -46,6 +46,7 @@ def as_list(x):
 class Slicer(object):
     def __getitem__(self, idx):
         return idx
+
 s = Slicer()
 
 

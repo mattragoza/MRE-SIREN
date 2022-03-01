@@ -38,6 +38,7 @@ def train(
         n_hidden=n_hidden,
         n_layers=n_layers
     ).float().cuda()
+    print(model)
     optimizer = optim.Adam(model.parameters(), lr=lr_init)
 
     metric_index = ['epoch', 'batch']

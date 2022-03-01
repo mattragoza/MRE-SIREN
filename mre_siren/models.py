@@ -14,6 +14,9 @@ class Sine(nn.Module):
     def forward(self, x):
         return torch.sin(self.w0 * x)
 
+    def __repr__(self):
+        return f'{type(self).__name__}(w0={self.w0})'
+
 
 class SIRENLayer(nn.Module):
 
@@ -30,20 +33,23 @@ class SIRENLayer(nn.Module):
             x = self.sine(x)
         return x
 
-    def init_weights(self, c, layer_idx):
-        n_input = self.linear.weights.shape[-1]
+    def init_weights(self, layer_idx, w0, c):
+        n_input = self.linear.weight.shape[-1]
         if layer_idx == 0:
             w_std = 1 / n_input
         else:
-            w_std = math.sqrt(c / n_input) / c
-        self.linear.weight.uniform_(-w_std, w_std)
+            w_std = math.sqrt(c / n_input) / w0
+        with torch.no_grad():
+            self.linear.weight.uniform_(-w_std, w_std)
 
 
 class SIREN(nn.Sequential):
     '''
     A sinusoidal representation network.
+
+    https://github.com/vsitzmann/siren
     '''
-    def __init__(self, n_input, n_output, n_hidden, n_layers, w0=30):
+    def __init__(self, n_input, n_output, n_hidden, n_layers, w0=30, c=6):
         assert n_layers > 0
         modules = []
         for i in range(n_layers):
@@ -55,7 +61,8 @@ class SIREN(nn.Sequential):
                 has_sine=not is_last, w0=w0 if is_first else 1
             ))
         super().__init__(*modules)
+        self.init_weights(w0, c)
 
-    def init_weights(self, c=6):
+    def init_weights(self, w0, c):
         for i, m in enumerate(self.children()):
-            m.init_weights(c, i)
+            m.init_weights(i, w0, c)
