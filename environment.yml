@@ -9,8 +9,8 @@ dependencies:
   - numpy
   - scipy
   - pandas
-  - cudatoolkit=10.2
-  - pytorch
+  - nvidia::cudatoolkit=10.2
+  - pytorch::pytorch
   - matplotlib
   - seaborn
   - ipykernel
@@ -19,4 +19,5 @@ dependencies:
   - panel
   - holoviews
   - bokeh
+  - fire
 prefix: /ocean/projects/asc170022p/mtragoza/.conda/envs/MRE-SIREN

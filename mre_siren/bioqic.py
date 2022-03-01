@@ -1,7 +1,9 @@
 from pathlib import Path
+from functools import lru_cache
 import numpy as np
 import xarray as xr
 import h5py, scipy.io
+import torch
 import matplotlib as mpl
 
 
@@ -16,6 +18,21 @@ def ndidx(t):
         all_idx.append(torch.remainder(idx, size))
         idx = torch.div(idx, size, rounding_mode='floor')
     return torch.stack(all_idx[::-1], dim=1)
+    return 
+
+
+def as_function(t, **kwargs):
+    '''
+    Represent a tensor as a function of coordinates.
+
+    Args:
+        t: An n-dimensional tensor.
+    Returns:
+        x: A matrix tensor of indices.
+        u: A matrix tensor of values.
+    '''
+    t = torch.as_tensor(t, **kwargs)
+    return torch.as_tensor(ndidx(t), **kwargs), t.reshape(-1, 1)
 
 
 def as_list(x):
@@ -26,28 +43,73 @@ def as_list(x):
     return x if isinstance(x, list) else [x]
 
 
-class BIOQICDataset(object):
+class Slicer(object):
+    def __getitem__(self, idx):
+        return idx
+s = Slicer()
 
-    def __init__(self, data_root, verbose=False):
+
+class BIOQICDataset(torch.utils.data.Dataset):
+
+    def __init__(
+        self,
+        data_root,
+        select=None,
+        downsample=None,
+        verbose=False,
+        **kwargs
+    ):
+        # load MATLAB phantom data files
         self.ds = load_bioqic_dataset(Path(data_root), verbose=verbose)
 
-    def view(self, var, scale=1):
+        if verbose:
+            print(self.ds.dims)
+
+        # subtract estimated phase shifts
+        phase_shift = estimate_phase_shift(
+            self.ds['phase_dejittered'], axis=(2,3,4,5), keepdims=True
+        ) * 2 * np.pi
+        self.ds['phase_unshifted'] = self.ds['phase_dejittered'] - phase_shift
+
+        if select is not None:
+            self.ds = self.ds.sel(select)
+
+            if verbose:
+                print(self.ds.dims)
+
+        if downsample is not None and downsample > 1:
+            self.ds = self.ds.coarsen(
+                x=downsample, y=downsample, z=downsample, boundary='pad'
+            ).max()
+
+            if verbose:
+                print(self.ds.dims)
+
+        # select the phase data array
+        self.arr = self.ds['phase_unshifted'].to_numpy()
+
+        # convert phase to function representation
+        self.x, self.u = as_function(self.arr, **kwargs)
+
+    def view(self, var, scale=1.0, v_min=0, v_max=1000):
         import holoviews as hv
         return hv.Layout([
             view_xarray(
                 self.ds, hue=h, x='x', y='y',
                 cmap=phase_color_map() if 'phase' in h else magnitude_color_map(),
-                v_range=(-2*np.pi, 2*np.pi) if 'phase' in h else (0, 1000),
+                v_range=(-2*np.pi, 2*np.pi) if 'phase' in h else (v_min, v_max),
                 scale=scale
             ) for h in as_list(var)
         ])
 
-    def as_function(self, var, **kwargs):
-        import torch
-        t = torch.tensor(self.ds[var].to_numpy(), **kwargs)
-        return ndidx(t), t.reshape(-1)
+    def __getitem__(self, idx):
+        return self.x[idx], self.u[idx]
+
+    def __len__(self):
+        return len(self.x)
 
 
+@lru_cache(4)
 def load_mat_data(mat_file, verbose=False):
     '''
     Load data file from MATLAB file.
@@ -166,23 +228,6 @@ def phase_color_map():
     )
 
 
-def estimate_phase_shift(a, axis=None):
-    '''
-    Estimate the global phase shift
-    in an MRE phase image using the
-    median phase value.
-
-    Args:
-        a: Array of MRE phase values.
-        axis: Axis or axes along which
-            to estimate phase shift(s).
-    Returns:
-        The estimated phase shift,
-        an integer muliple of 2 pi.
-    '''
-    return np.round(np.median(a, axis=axis) / (2*np.pi))
-
-
 def view_xarray(ds, x, y, hue, cmap, v_range, scale):
     '''
     Interactively view an xarray
@@ -208,3 +253,20 @@ def view_xarray(ds, x, y, hue, cmap, v_range, scale):
         width=scale*ds.dims[x],
         height=scale*ds.dims[y]
     ).redim.range(**{hue: tuple(v_range)}).hist()
+
+
+def estimate_phase_shift(a, **kwargs):
+    '''
+    Estimate the global phase shift
+    in an MRE phase image using the
+    median phase value.
+
+    Args:
+        a: Array of MRE phase values.
+        kwargs: Keyword arguments passed
+            to numpy.median.
+    Returns:
+        The estimated phase shift(s),
+            an integer muliple of 2 pi.
+    '''
+    return np.round(np.median(a, **kwargs) / (2*np.pi))
