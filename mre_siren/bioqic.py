@@ -3,6 +3,7 @@ from functools import lru_cache
 import numpy as np
 import xarray as xr
 import h5py, scipy.io
+import scipy.ndimage
 import torch
 import matplotlib as mpl
 
@@ -18,7 +19,6 @@ def ndidx(t):
         all_idx.append(torch.remainder(idx, size))
         idx = torch.div(idx, size, rounding_mode='floor')
     return torch.stack(all_idx[::-1], dim=1)
-    return 
 
 
 def as_function(t, **kwargs):
@@ -32,7 +32,7 @@ def as_function(t, **kwargs):
         u: A matrix tensor of values.
     '''
     t = torch.as_tensor(t, **kwargs)
-    return torch.as_tensor(ndidx(t), **kwargs), t.reshape(-1, 1)
+    return torch.as_tensor(ndidx(t), **kwargs), t.reshape(-1)
 
 
 def as_list(x):
@@ -72,6 +72,11 @@ class BIOQICDataset(torch.utils.data.Dataset):
         ) * 2 * np.pi
         self.ds['phase_unshifted'] = self.ds['phase_dejittered'] - phase_shift
 
+        # get segmentation mask from magnitude
+        self.ds['mask'] = (self.ds.dims, (scipy.ndimage.gaussian_filter(
+            self.ds['magnitude_raw'], sigma=0.8) > 120
+        ).astype(int))
+
         if select is not None:
             self.ds = self.ds.sel(select)
 
@@ -88,11 +93,14 @@ class BIOQICDataset(torch.utils.data.Dataset):
 
         # select the phase data array
         self.arr = self.ds['phase_unshifted'].to_numpy()
+        self.mask = self.ds['mask'].to_numpy()
 
         # convert phase to function representation
         self.x, self.u = as_function(self.arr, **kwargs)
+        self.m = (self.mask.reshape(-1) > 0)
+        self.x.requires_grad = True
 
-    def view(self, var, scale=1.0, v_min=0, v_max=1000):
+    def view(self, var, scale=1.0, v_min=0, v_max=None):
         import holoviews as hv
         return hv.Layout([
             view_xarray(
@@ -104,7 +112,7 @@ class BIOQICDataset(torch.utils.data.Dataset):
         ])
 
     def __getitem__(self, idx):
-        return self.x[idx], self.u[idx]
+        return self.x[idx], self.u[idx], self.m[idx]
 
     def __len__(self):
         return len(self.x)
@@ -249,6 +257,11 @@ def view_xarray(ds, x, y, hue, cmap, v_range, scale):
         A holoviews Image object.
     '''
     import holoviews as hv
+    v_min, v_max = v_range
+    if v_min is None:
+        v_min = ds[hue].min()
+    if v_max is None:
+        v_max = ds[hue].max()
     return hv.Dataset(ds[hue]).to(hv.Image, [x, y], dynamic=True).opts(
         cmap=cmap,
         width=scale*ds.dims[x],

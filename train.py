@@ -45,9 +45,11 @@ def train(
     metrics = pd.DataFrame(columns=metric_index).set_index(metric_index)
 
     for i in range(n_epochs+1):
-        for j, (x, u) in enumerate(data_loader):
+        for j, (x, u, m) in enumerate(data_loader):
             optimizer.zero_grad()
 
+            # only train on segmented region
+            x, u = x[m], u[m]
             u_pred, G_pred = torch.split(model.forward(x), 1, dim=1)
 
             mse_loss = F.mse_loss(u, u_pred)
