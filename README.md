@@ -15,7 +15,7 @@ python -m ipykernel install --user --name=MRE-SIREN
 - Aim 1: Replicate MDEV.m in python
 	- Run `download_data.sh` to download BIOQIC data files
 	- Run `MDEV.m` with matlab to perform elasticity inversion
-	- Run `notebooks/BIOQIC-data-exploration.ipynb` to replicate
+	- Run `notebooks/BIOQIC-data-processing.ipynb` to replicate
 
 - Aim 2: Train phantom SIREN model
 	- Run `notebooks/SIREN-testing.ipynb` to train on toy data

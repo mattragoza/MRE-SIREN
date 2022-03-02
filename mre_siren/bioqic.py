@@ -3,14 +3,14 @@ from functools import lru_cache
 import numpy as np
 import xarray as xr
 import h5py, scipy.io
-import scipy.ndimage
+from scipy.ndimage import gaussian_filter
 import torch
 import matplotlib as mpl
 
 
 def ndidx(t):
     '''
-    Return a tensor of n-dimensional
+    Return a tensor of N-dimensional
     indices for the provided tensor.
     '''
     all_idx = []
@@ -23,16 +23,17 @@ def ndidx(t):
 
 def as_function(t, **kwargs):
     '''
-    Represent a tensor as a function of coordinates.
+    Represent a tensor as indices and values.
 
     Args:
-        t: An n-dimensional tensor.
+        t: An N-dimensional tensor of M values.
     Returns:
-        x: A matrix tensor of indices.
-        u: A matrix tensor of values.
+        An (M, N) tensor of indices.
+        An (M,) tensor of values.
     '''
     t = torch.as_tensor(t, **kwargs)
-    return torch.as_tensor(ndidx(t), **kwargs), t.reshape(-1)
+    idx = torch.as_tensor(ndidx(t), **kwargs)
+    return idx, t.reshape(-1)
 
 
 def as_list(x):
@@ -43,62 +44,85 @@ def as_list(x):
     return x if isinstance(x, list) else [x]
 
 
+def has(x):
+    return x is not None
+
+
 class Slicer(object):
+    '''
+    A helper object that allows using
+    slicing syntax to get slice objects.
+    '''
     def __getitem__(self, idx):
         return idx
 
-s = Slicer()
+s_ = Slicer()
 
 
 class BIOQICDataset(torch.utils.data.Dataset):
 
     def __init__(
         self,
-        data_root,
+        data_root=None,
         select=None,
         downsample=None,
         verbose=False,
+        sigma=0.8,
+        threshold=120,
+        ds=None,
         **kwargs
     ):
-        # load MATLAB phantom data files
-        self.ds = load_bioqic_dataset(Path(data_root), verbose=verbose)
+        assert has(data_root) ^ has(ds), 'must provide either data_root or ds'
 
-        if verbose:
-            print(self.ds.dims)
+        if data_root: # load MATLAB phantom data files
+            self.ds = load_bioqic_dataset(data_root, verbose=verbose)
+        else:
+            self.ds = ds.copy()
 
         # subtract estimated phase shifts
-        phase_shift = estimate_phase_shift(
-            self.ds['phase_dejittered'], axis=(2,3,4,5), keepdims=True
-        ) * 2 * np.pi
-        self.ds['phase_unshifted'] = self.ds['phase_dejittered'] - phase_shift
+        if verbose:
+            print(f'Subtracting phase shifts')
+        phase = self.ds['phase_unwrap_noipd']
+        phase_shift = estimate_phase_shift(phase, axis=(2,3,4,5), keepdims=True)
+        if verbose:
+            print(phase_shift[...,0,0,0,0])
+        phase = phase - phase_shift*2*np.pi
+        self.ds['phase_unshifted'] = phase
 
         # get segmentation mask from magnitude
-        self.ds['mask'] = (self.ds.dims, (scipy.ndimage.gaussian_filter(
-            self.ds['magnitude_raw'], sigma=0.8) > 120
-        ).astype(int))
+        if verbose:
+            print('Computing segmentation mask')
+        magnitude = self.ds['magnitude']
+        mask = (gaussian_filter(magnitude, sigma=sigma) > threshold).astype(int)
+        self.ds['mask'] = (self.ds.dims, mask)
 
         if select is not None:
+            if verbose:
+                print(f'Selecting subset {select}')
             self.ds = self.ds.sel(select)
 
-            if verbose:
-                print(self.ds.dims)
-
         if downsample is not None and downsample > 1:
-            self.ds = self.ds.coarsen(
-                x=downsample, y=downsample, z=downsample, boundary='pad'
-            ).max()
-
             if verbose:
-                print(self.ds.dims)
+                print(f'Downsampling by factor {downsample}')
+            k = downsample
+            self.ds = self.ds.coarsen(x=k, y=k, z=k, boundary='pad').mean()
+            self.ds['mask'] = (self.ds['mask'] > 0.5).astype(int)
 
-        # select the phase data array
-        self.arr = self.ds['phase_unshifted'].to_numpy()
+        if verbose:
+            print('Getting numpy arrays')
+        self.magnitude = self.ds['magnitude'].to_numpy()
+        self.phase = self.ds['phase_unshifted'].to_numpy()
         self.mask = self.ds['mask'].to_numpy()
 
-        # convert phase to function representation
-        self.x, self.u = as_function(self.arr, **kwargs)
+        # convert to function representation
+        if verbose:
+            print('Getting indices and values')
+        self.x, self.u = as_function(self.phase, **kwargs)
         self.m = (self.mask.reshape(-1) > 0)
         self.x.requires_grad = True
+
+        if verbose:
+            print(self.phase.shape, self.x.shape, self.u.shape)
 
     def view(self, var, scale=1.0, v_min=0, v_max=None):
         import holoviews as hv
@@ -146,7 +170,7 @@ def print_mat_info(d, level=0, tab=' '*4):
     '''
     Recursively print information
     about the contents of a data set
-    stored a in dict-like format.
+    stored in dict-like format.
     '''
     for k, v in d.items():
         if hasattr(v, 'shape'):
@@ -157,25 +181,20 @@ def print_mat_info(d, level=0, tab=' '*4):
             print_mat_info(v, level+1)
 
 
-def load_bioqic_dataset(data_root, verbose=False):
+def load_bioqic_dataset(data_root, all=False, verbose=False):
     '''
-    Load the BIOQIC data set of
-    phantom MRE images.
+    Load the BIOQIC phantom MRE data set.
 
     Args:
         data_root: The directory containing
             the MATLAB data files.
+        all: Load all .mat files instead of just
+            phantom_unwrapped_dejittered.mat.
         verbose: Print contents of the files.
     Returns:
         An xarray.Dataset of the loaded data.
     '''
-    # load the individual matlab files
-    data_r = load_mat_data(data_root / 'phantom_raw.mat', verbose)
-    data_u = load_mat_data(data_root / 'phantom_unwrapped.mat', verbose)
-    data_d = load_mat_data(
-        data_root / 'phantom_unwrapped_dejittered.mat', verbose
-    )
-    data_c = load_mat_data(data_root / 'phantom_raw_complex.mat', verbose)
+    data_root = Path(data_root)
 
     # metadata from pdf doc applies to all data
     metadata = dict(
@@ -183,37 +202,39 @@ def load_bioqic_dataset(data_root, verbose=False):
         coords=dict(
             freq=[30, 40, 50, 60, 70, 80, 90, 100],
             MEG=['y', 'x', 'z'],
-            t=np.arange(8) / 8,
-            z=np.arange(25) * 0.0015,
+            t=np.arange(  8) / 8,
+            z=np.arange( 25) * 0.0015,
             x=np.arange(128) * 0.0015,
-            y=np.arange(80) * 0.0015,
+            y=np.arange( 80) * 0.0015,
         )
     )
 
-    # reverse matlab axes order
-    rev_axes = range(6)[::-1]
-
-    # create xarray dataset from downloaded files
-    return xr.Dataset(dict(
-        magnitude_raw=xr.DataArray(data_r['magnitude'], **metadata),
-        magnitude_unwrapped=xr.DataArray(data_u['magnitude'], **metadata),
-        magnitude_dejittered=xr.DataArray(
-            data_d['magnitude'].transpose(rev_axes).astype(np.float64),
-            **metadata
-        ),
-        phase_raw=xr.DataArray(data_r['phase'], **metadata),
-        phase_unwrapped=xr.DataArray(data_u['phase_unwrapped'], **metadata),
-        phase_dejittered = xr.DataArray(
-            data_d['phase_unwrap_noipd'].transpose(range(6)[::-1]),
-            **metadata
-        ),
-        cube_real = xr.DataArray(
-            data_c['cube'].real.transpose(rev_axes), **metadata
-        ),
-        cube_imag = xr.DataArray(
-            data_c['cube'].imag.transpose(rev_axes), **metadata
+    # specify the vars that we will get from each file
+    # we also need to reverse axes order for some files
+    data_vars = [
+        ('phantom_raw_complex.mat', ['cube'], np.complex128, True),
+        ('phantom_raw.mat',         ['phase'], np.float64, False),
+        ('phantom_unwrapped.mat',   ['phase_unwrapped'], np.float64, False),
+        (
+            'phantom_unwrapped_dejittered.mat',
+                ['phase_unwrap_noipd', 'magnitude'], np.float64, True
         )
-    ))
+    ]
+    if not all: # just load the processed phase and magnitude data
+        data_vars = data_vars[-1:]
+
+    # load the individual matlab files into xarrays
+    xr_data = dict()
+    for mat_base, mat_vars, dtype, rev_axes in data_vars:
+        mat_data = load_mat_data(data_root/mat_base, verbose)
+        for var in mat_vars:
+            arr = mat_data[var].astype(dtype)
+            if rev_axes:
+                arr = arr.transpose(range(6)[::-1])
+            xr_data[var] = xr.DataArray(arr, **metadata)
+
+    # create dataset from xarrays
+    return xr.Dataset(xr_data)
 
 
 def magnitude_color_map():
