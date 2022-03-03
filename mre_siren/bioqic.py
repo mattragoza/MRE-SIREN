@@ -8,32 +8,52 @@ import torch
 import matplotlib as mpl
 
 
-def ndidx(t):
+def nd_coords(shape, extent=2, center=True):
     '''
     Return a tensor of N-dimensional
-    indices for the provided tensor.
+    coordinates for a grid with the
+    provided shape (M total values).
+
+    Args:
+        shape: The shape of the N-dimensional grid.
+        extent: The spatial extent of the grid.
+        center: Center the coordinates at 0.
+    Returns:
+        An (M, N) tensor of coordinates.
     '''
-    all_idx = []
-    idx = torch.arange(t.numel())
-    for size in t.shape[::-1]:
-        all_idx.append(torch.remainder(idx, size))
-        idx = torch.div(idx, size, rounding_mode='floor')
-    return torch.stack(all_idx[::-1], dim=1)
+    n_dims = len(shape)
+    shape = np.array(shape)
+    extent = np.broadcast_to(extent, (n_dims,))
+    resolution = extent / shape
+
+    # for each dim, get d points spaced according to resolution
+    dims = [torch.arange(d)*r for d,r in zip(shape, resolution)]
+
+    # get n-demsenional coordinates from dims
+    coords = torch.cartesian_prod(*dims)
+
+    if center: # subtract the center
+        coords -= coords.mean(dim=0)
+
+    return coords
 
 
-def as_function(t, **kwargs):
+def as_nd_coords(t, extent=2, center=True, **kwargs):
     '''
-    Represent a tensor as indices and values.
+    Represent a tensor as coordinates and values.
 
     Args:
         t: An N-dimensional tensor of M values.
     Returns:
-        An (M, N) tensor of indices.
-        An (M,) tensor of values.
+        An (M, N) tensor of coordinates.
+        An (M, 1) tensor of values.
     '''
-    t = torch.as_tensor(t, **kwargs)
-    idx = torch.as_tensor(ndidx(t), **kwargs)
-    return idx, t.reshape(-1)
+    coords = nd_coords(t.shape, extent, center)
+    values = t.reshape(-1, 1)
+    return (
+        torch.as_tensor(coords, **kwargs),
+        torch.as_tensor(values, **kwargs)
+    )
 
 
 def as_list(x):
@@ -114,10 +134,15 @@ class BIOQICDataset(torch.utils.data.Dataset):
         self.phase = self.ds['phase_unshifted'].to_numpy()
         self.mask = self.ds['mask'].to_numpy()
 
-        # convert to function representation
+        # convert to coordinate representation
         if verbose:
-            print('Getting indices and values')
-        self.x, self.u = as_function(self.phase, **kwargs)
+            print('Getting resolution, coordinates, and values')
+
+        self.resolution = get_xarray_resolution(self.ds)
+        if verbose:
+            print(self.resolution)
+
+        self.x, self.u = as_nd_coords(self.phase, **kwargs)
         self.m = (self.mask.reshape(-1) > 0)
         self.x.requires_grad = True
 
@@ -305,3 +330,27 @@ def estimate_phase_shift(a, **kwargs):
             an integer muliple of 2 pi.
     '''
     return np.round(np.median(a, **kwargs) / (2*np.pi))
+
+
+def get_xarray_resolution(xr):
+    '''
+    Get the resolutions of an xarray
+    object, assuming uniform spacing
+    along each dimension.
+
+    Args:
+        xr: N-dimensional xr.DataArray
+            or xr.Dataset object.
+    Returns:
+        N vector of resolutions.
+    '''
+    resolution = []
+    for k, v in xr.coords.items():
+        try:
+            r = (v[1] - v[0]).to_numpy()
+            resolution.append(r)
+        except TypeError: # dim has non-numeric coords
+            resolution.append(1)
+        except IndexError: # dim has length 1
+            continue
+    return np.array(resolution)

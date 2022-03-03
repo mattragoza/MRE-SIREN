@@ -64,3 +64,7 @@ class SIREN(nn.Sequential):
                 w_std = math.sqrt(c / n_input)
             with torch.no_grad():
                 m.linear.weight.uniform_(-w_std, w_std)
+
+    def forward(self, x):
+        x = super().forward(x)
+        return torch.split(x, 1, dim=1)
