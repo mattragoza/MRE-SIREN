@@ -85,6 +85,7 @@ class BIOQICDataset(torch.utils.data.Dataset):
         self,
         data_root=None,
         select=None,
+        upsample=None,
         downsample=None,
         verbose=False,
         sigma=0.8,
@@ -121,6 +122,18 @@ class BIOQICDataset(torch.utils.data.Dataset):
                 print(f'Selecting subset {select}')
             self.ds = self.ds.sel(select)
 
+        # temporal upsampling
+        if upsample is not None and upsample > 1:
+            if verbose:
+                print(f'Upsampling by factor {upsample}')
+            t = nd_coords(
+                shape=(upsample*self.ds.dims['t'],),
+                extent=1,
+                center=False
+            )
+            self.ds = self.ds.interp(t=t)
+
+        # spatial downsampling
         if downsample is not None and downsample > 1:
             if verbose:
                 print(f'Downsampling by factor {downsample}')
