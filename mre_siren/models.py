@@ -67,4 +67,6 @@ class SIREN(nn.Sequential):
 
     def forward(self, x):
         x = super().forward(x)
-        return torch.split(x, 1, dim=1)
+        if x.shape[1] > 1:
+            x = torch.split(x, 1, dim=1)
+        return x

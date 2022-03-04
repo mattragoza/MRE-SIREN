@@ -157,7 +157,6 @@ class BIOQICDataset(torch.utils.data.Dataset):
 
         self.x, self.u = as_nd_coords(self.phase, **kwargs)
         self.m = (self.mask.reshape(-1) > 0)
-        self.x.requires_grad = True
 
         if verbose:
             print(self.phase.shape, self.x.shape, self.u.shape)
