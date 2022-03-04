@@ -84,6 +84,10 @@ class BIOQICDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         data_root=None,
+        mat_base='phantom_wave_shear.mat',
+        phase_shift=False,
+        segment=True,
+        make_coords=True,
         select=None,
         upsample=None,
         downsample=None,
@@ -91,31 +95,42 @@ class BIOQICDataset(torch.utils.data.Dataset):
         sigma=0.8,
         threshold=120,
         ds=None,
+        wave_var=None,
         **kwargs
     ):
         assert has(data_root) ^ has(ds), 'must provide either data_root or ds'
 
         if data_root: # load MATLAB phantom data files
-            self.ds = load_bioqic_dataset(data_root, verbose=verbose)
+            self.ds, wave_var = load_bioqic_dataset(
+                data_root, mat_base, verbose=verbose
+            )
         else:
             self.ds = ds.copy()
+            assert wave_var, 'must specify wave variable'
+        
+        self.wave_var = wave_var
+        print(wave_var)
 
-        # subtract estimated phase shifts
-        if verbose:
-            print(f'Subtracting phase shifts')
-        phase = self.ds['phase_unwrap_noipd']
-        phase_shift = estimate_phase_shift(phase, axis=(2,3,4,5), keepdims=True)
-        if verbose:
-            print(phase_shift[...,0,0,0,0])
-        phase = phase - phase_shift*2*np.pi
-        self.ds['phase_unshifted'] = phase
+        if phase_shift: # subtract estimated phase shifts
+            if verbose:
+                print(f'Subtracting phase shifts')
+            phase = self.ds[wave_var]
+            phase_shift = estimate_phase_shift(
+                phase, axis=(2,3,4,5), keepdims=True
+            )
+            if verbose:
+                print(phase_shift[...,0,0,0,0])
+            phase = phase - phase_shift*2*np.pi
+            self.ds[wave_var] = phase
 
-        # get segmentation mask from magnitude
-        if verbose:
-            print('Computing segmentation mask')
-        magnitude = self.ds['magnitude']
-        mask = (gaussian_filter(magnitude, sigma=sigma) > threshold).astype(int)
-        self.ds['mask'] = (self.ds.dims, mask)
+        if segment: # get segmentation mask from magnitude
+            if verbose:
+                print('Computing segmentation mask')
+            magnitude = self.ds['magnitude']
+            mask = (
+                gaussian_filter(magnitude, sigma=sigma) > threshold
+            ).astype(int)
+            self.ds['mask'] = (self.ds.dims, mask)
 
         if select is not None:
             if verbose:
@@ -139,38 +154,66 @@ class BIOQICDataset(torch.utils.data.Dataset):
                 print(f'Downsampling by factor {downsample}')
             k = downsample
             self.ds = self.ds.coarsen(x=k, y=k, z=k, boundary='pad').mean()
-            self.ds['mask'] = (self.ds['mask'] > 0.5).astype(int)
+            if segment:
+                self.ds['mask'] = (self.ds['mask'] > 0.5).astype(int)
 
         if verbose:
             print('Getting numpy arrays')
         self.magnitude = self.ds['magnitude'].to_numpy()
-        self.phase = self.ds['phase_unshifted'].to_numpy()
-        self.mask = self.ds['mask'].to_numpy()
-
-        # convert to coordinate representation
+        self.wave = self.ds[wave_var].to_numpy()
+        if segment:
+            self.mask = self.ds['mask'].to_numpy()
         if verbose:
-            print('Getting resolution, coordinates, and values')
+            print(self.wave.shape)
 
-        self.resolution = get_xarray_resolution(self.ds)
-        if verbose:
-            print(self.resolution)
+        if make_coords:
+            # convert to coordinate representation
+            if verbose:
+                print('Getting resolution, coordinates, and values')
 
-        self.x, self.u = as_nd_coords(self.phase, **kwargs)
-        self.m = (self.mask.reshape(-1) > 0)
+            self.resolution = get_xarray_resolution(self.ds)
+            if verbose:
+                print(self.resolution)
 
-        if verbose:
-            print(self.phase.shape, self.x.shape, self.u.shape)
+            self.x, self.u = as_nd_coords(self.wave, **kwargs)
+            if segment:
+                self.m = (self.mask.reshape(-1) > 0)
 
-    def view(self, var, scale=1.0, v_min=0, v_max=None):
+            if verbose:
+                print(self.x.shape, self.u.shape)
+
+    def view(self, var=None, scale=4):
         import holoviews as hv
-        return hv.Layout([
-            view_xarray(
-                self.ds, hue=h, x='x', y='y',
-                cmap=phase_color_map() if 'phase' in h else magnitude_color_map(),
-                v_range=(-2*np.pi, 2*np.pi) if 'phase' in h else (v_min, v_max),
-                scale=scale
-            ) for h in as_list(var)
-        ])
+
+        if var is None:
+            var = list(self.ds.keys())
+
+        hv_images = []
+        for v in as_list(var):
+            if 'wave' in v or 'phase' in v:
+                cmap = phase_color_map()
+                v_min, v_max = (-2*np.pi, 2*np.pi)
+            else:
+                cmap = magnitude_color_map()
+
+            v_min = v_max = None
+
+            if np.iscomplexobj(self.ds[v]):
+                hv_images.append(view_xarray(
+                    self.ds, var=v, x='x', y='y', func=np.real,
+                    cmap=cmap, v_min=v_min, v_max=v_max, scale=scale
+                ))
+                hv_images.append(view_xarray(
+                    self.ds, var=v, x='x', y='y', func=np.imag,
+                    cmap=cmap, v_min=v_min, v_max=v_max, scale=scale
+                ))
+            else:
+                hv_images.append(view_xarray(
+                    self.ds, var=v, x='x', y='y', func=None,
+                    cmap=cmap, v_min=v_min, v_max=v_max, scale=scale
+                ))
+
+        return hv.Layout(hv_images).cols(1)
 
     def __getitem__(self, idx):
         return self.x[idx], self.u[idx], self.m[idx]
@@ -190,17 +233,21 @@ def load_mat_data(mat_file, verbose=False):
             contents of the file.
     Returns:
         Loaded data in a dict-like format.
+        Flag indicating MATLAB axes order.
+            (i.e. if True, then reverse order)
     '''
     mat_file = str(mat_file)
     try:
         data = scipy.io.loadmat(mat_file)
+        rev_axes = True
     except NotImplementedError as e:
         # Please use HDF reader for matlab v7.3 files
         data = h5py.File(mat_file)
+        rev_axes = False
     if verbose:
         print(mat_file)
         print_mat_info(data, level=1)
-    return data
+    return data, rev_axes
 
 
 def print_mat_info(d, level=0, tab=' '*4):
@@ -218,82 +265,79 @@ def print_mat_info(d, level=0, tab=' '*4):
             print_mat_info(v, level+1)
 
 
-def load_bioqic_dataset(data_root, all=False, verbose=False):
+def load_bioqic_dataset(data_root, mat_base, verbose=False):
     '''
     Load the BIOQIC phantom MRE data set.
 
     Args:
         data_root: The directory containing
             the MATLAB data files.
+        which: Which MATLAB data file(s) to load.
         all: Load all .mat files instead of just
             phantom_unwrapped_dejittered.mat.
         verbose: Print contents of the files.
     Returns:
         An xarray.Dataset of the loaded data.
+        Name of most-processed wave variable
+            loaded from the selected files.
     '''
     data_root = Path(data_root)
 
-    # metadata from pdf doc applies to all data
+    # metadata from pdf document
     metadata = dict(
-        dims=['freq', 'MEG', 't', 'z', 'x', 'y'],
+        dims=['frequency', 'MEG', 't', 'z', 'x', 'y'],
         coords=dict(
-            freq=[30, 40, 50, 60, 70, 80, 90, 100],
-            MEG=['y', 'x', 'z'],
-            t=np.arange(  8) / 8,
-            z=np.arange( 25) * 0.0015,
+            frequency=[30, 40, 50, 60, 70, 80, 90, 100],
+            MEG=['z', 'x', 'y'],
+            t=np.arange(8) / 8,
+            z=np.arange(25)  * 0.0015,
             x=np.arange(128) * 0.0015,
-            y=np.arange( 80) * 0.0015,
+            y=np.arange(80)  * 0.0015,
         )
     )
 
-    # specify the vars that we will get from each file
-    # we also need to reverse axes order for some files
-    data_vars = [
-        ('phantom_raw_complex.mat', ['cube'], np.complex128, True),
-        ('phantom_raw.mat',         ['phase'], np.float64, False),
-        ('phantom_unwrapped.mat',   ['phase_unwrapped'], np.float64, False),
-        (
-            'phantom_unwrapped_dejittered.mat',
-                ['phase_unwrap_noipd', 'magnitude'], np.float64, True
-        )
-    ]
-    if not all: # just load the processed phase and magnitude data
-        data_vars = data_vars[-1:]
+    # variables defined in each matlab file
+    data_vars = {
+        'phantom_raw_complex.mat': ['cube'],
+        'phantom_raw.mat': ['magnitude', 'phase'],
+        'phantom_unwrapped.mat': ['magnitude', 'phase_unwrapped'],
+        'phantom_unwrapped_dejittered.mat': ['magnitude', 'phase_unwrap_noipd'],
+        'phantom_smoothed.mat': ['magnitude', 'phase_smoothed'],
+        'phantom_wave.mat': ['magnitude', 'wave'],
+        'phantom_wave_shear.mat': ['magnitude', 'wave_shear'], 
+        'phantom_MDEV.mat': ['magnitude', 'absG', 'phi', 'strain']
+    }
 
-    # load the individual matlab files into xarrays
+    # put the data into xarrays
     xr_data = dict()
-    for mat_base, mat_vars, dtype, rev_axes in data_vars:
-        mat_data = load_mat_data(data_root/mat_base, verbose)
-        for var in mat_vars:
-            arr = mat_data[var].astype(dtype)
-            if rev_axes:
-                arr = arr.transpose(range(6)[::-1])
-            xr_data[var] = xr.DataArray(arr, **metadata)
+    for mat_base in as_list(mat_base):
 
-    # create dataset from xarrays
-    return xr.Dataset(xr_data)
+        # load the selected matlab file
+        mat_data, rev_axes = load_mat_data(data_root/mat_base, verbose)
 
+        # for each variable in the file,
+        for var in data_vars[mat_base]:
 
-def load_mdev_dataset(data_root, verbose=False):
+            # get numpy array from matlab data
+            arr = np.array(mat_data[var])
+            arr_metadata = metadata.copy()
+            n_dims = arr.ndim
 
-    metadata = dict(
-        dims=['z', 'x', 'y'],
-        coords=dict(
-            z=np.arange( 25) * 0.0015,
-            x=np.arange(128) * 0.0015,
-            y=np.arange( 80) * 0.0015,
-        )
-    )
-    data_root = Path(data_root)
-    mat_data = load_mat_data(data_root/'MDEV_output.mat', verbose)
+            if rev_axes: # some matlab files use reversed order
+                arr = arr.transpose(range(n_dims)[::-1])
 
-    xr_data = dict()
-    for var in ['absG', 'phi', 'strain']:
-        arr = mat_data[var].astype(np.float64)
-        arr = arr.transpose(range(3)[::-1])
-        xr_data[var] = xr.DataArray(arr, **metadata)
+            if n_dims < 6: # use only the relevant metadata
+                arr_metadata['dims'] = metadata['dims'][-n_dims:]
+                arr_metadata['coords'] = {
+                    k: metadata['coords'][k] for k in arr_metadata['dims']
+                }
 
-    return xr.Dataset(xr_data)
+            if 'wave' in mat_base: # after Fourier transform
+                arr_metadata['coords']['t'] = range(arr.shape[2])
+
+            xr_data[var] = xr.DataArray(arr, **arr_metadata)
+
+    return xr.Dataset(xr_data), var
 
 
 def magnitude_color_map():
@@ -308,16 +352,18 @@ def magnitude_color_map():
 
 def phase_color_map():
     '''
-    Create a colormap for MRE phase images
+    Create a colormap for MRE wave images
     from yellow, red, black, blue, to cyan.
     '''
     colors = [(1,1,0), (1,0,0), (0,0,0), (0,0,1), (0,1,1)]
     return mpl.colors.LinearSegmentedColormap.from_list(
-        name='phase', colors=colors, N=255
+        name='wave', colors=colors, N=255
     )
 
 
-def view_xarray(ds, x, y, hue, cmap, v_range, scale):
+def view_xarray(
+    ds, x, y, var, cmap, v_min=None, v_max=None, scale=1, func=None
+):
     '''
     Interactively view an xarray
     defined in an xarray Dataset.
@@ -329,24 +375,46 @@ def view_xarray(ds, x, y, hue, cmap, v_range, scale):
         ds: An xarray Dataset.
         x: The x dimension.
         y: The y dimension.
-        hue: The data to view.
+        var: The data to view.
         cmap: Color map object.
-        v_range: Color map value range.
+        v_min: Minimum color value.
+        v_max: Maximum color value.
         scale: Figure scale.
+        func: View function of data.
     Returns:
         A holoviews Image object.
     '''
     import holoviews as hv
-    v_min, v_max = v_range
+    data = ds[var]
+    var_label = var
+
+    ref_var = None
+    if var.startswith('my_'):
+        ref_var = var[3:]
+    elif var.endswith('_pred'):
+        ref_var = var[:-5]
+    
+    if ref_var:
+        ref_data = ds[ref_var]
+
+    if func is not None:
+        data = func(data)
+        var_label = f'{func.__name__}({var})'
+        if ref_var:
+            ref_data = func(ref_data)
+
     if v_min is None:
-        v_min = ds[hue].min()
+        v_min = np.percentile(ref_data if ref_var else data, 2.5)
     if v_max is None:
-        v_max = ds[hue].max()
-    return hv.Dataset(ds[hue]).to(hv.Image, [x, y], dynamic=True).opts(
-        cmap=cmap,
-        width=scale*ds.dims[x],
-        height=scale*ds.dims[y]
-    ).redim.range(**{hue: tuple(v_range)}).hist()
+        v_max = np.percentile(ref_data if ref_var else data, 97.5)
+
+    image = hv.Dataset(data).to(hv.Image, [x, y], dynamic=True)
+    image = image.opts(
+        cmap=cmap, width=scale*ds.dims[x], height=scale*ds.dims[y]
+    )
+    image = image.redim.range(**{var: (v_min, v_max)})
+    image = image.hist().redim.label(**{var: var_label})
+    return image
 
 
 def estimate_phase_shift(a, **kwargs):

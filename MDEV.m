@@ -52,7 +52,12 @@
 % edit: 2013/11/26, Ingolf Sack
 % last change: 2019/04/26, Heiko Tzschätzsch
 
-function [absG, phi, strain] = MDEV(phase, frequency, inplaneResolution, parameters)
+function MDEV()
+
+	load('data/BIOQIC/phantom_unwrapped_dejittered.mat');
+	phase = phase_unwrap_noipd;
+	frequency = info.frequencies_Hz;
+	inplaneResolution = [info.dy_m, info.dx_m];
 
     % filter parameters
     if ~exist('parameters', 'var')
@@ -69,7 +74,7 @@ function [absG, phi, strain] = MDEV(phase, frequency, inplaneResolution, paramet
     % smooth the phase signal
     smoothedPhase = smoothPhase(phase, (parameters.smoothPhase));
 
-    % unwrap the phase and performe temporal Fourier transformation
+    % unwrap the phase and perform temporal Fourier transformation
     waveField = gradwrapFFT(smoothedPhase, inplaneResolution, (parameters.fft));
 
     % lowpass filtering using butterworth
@@ -78,6 +83,23 @@ function [absG, phi, strain] = MDEV(phase, frequency, inplaneResolution, paramet
     % main MVED inversion using Laplace operator
     [absG, phi, strain] = laplaceInversion(shearWaveField, inplaneResolution, frequency, (parameters.laplaceInversion));
 
+    phase_smoothed = smoothedPhase;
+    class(phase_smoothed)
+    save('data/BIOQIC/phantom_smoothed.mat', 'magnitude', 'phase_smoothed');
+
+    magnitude = resample(magnitude, 1, 4, 'Dimension', 4);
+    wave = waveField;
+    wave_shear = shearWaveField;
+    class(wave)
+    save('data/BIOQIC/phantom_wave.mat', 'magnitude', 'wave');
+    class(wave_shear)
+    save('data/BIOQIC/phantom_wave_shear.mat', 'magnitude', 'wave_shear');
+
+    magnitude = mean(magnitude, [4, 5, 6]);
+    class(absG)
+    class(phi)
+    class(strain)
+    save('data/BIOQIC/phantom_MDEV.mat', 'magnitude', 'absG', 'phi', 'strain');
 end
 
 function smoothedPhase = smoothPhase(phase, parameters)
