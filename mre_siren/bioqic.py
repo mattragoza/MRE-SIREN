@@ -274,6 +274,28 @@ def load_bioqic_dataset(data_root, all=False, verbose=False):
     return xr.Dataset(xr_data)
 
 
+def load_mdev_dataset(data_root, verbose=False):
+
+    metadata = dict(
+        dims=['z', 'x', 'y'],
+        coords=dict(
+            z=np.arange( 25) * 0.0015,
+            x=np.arange(128) * 0.0015,
+            y=np.arange( 80) * 0.0015,
+        )
+    )
+    data_root = Path(data_root)
+    mat_data = load_mat_data(data_root/'MDEV_output.mat', verbose)
+
+    xr_data = dict()
+    for var in ['absG', 'phi', 'strain']:
+        arr = mat_data[var].astype(np.float64)
+        arr = arr.transpose(range(3)[::-1])
+        xr_data[var] = xr.DataArray(arr, **metadata)
+
+    return xr.Dataset(xr_data)
+
+
 def magnitude_color_map():
     '''
     Create a linear grayscale colormap.
