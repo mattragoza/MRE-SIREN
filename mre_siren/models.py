@@ -65,8 +65,8 @@ class SIREN(nn.Sequential):
             with torch.no_grad():
                 m.linear.weight.uniform_(-w_std, w_std)
 
-    def forward(self, x):
+    def forward(self, x, split=False):
         x = super().forward(x)
-        if x.shape[1] > 1:
+        if split:
             x = torch.split(x, 1, dim=1)
         return x

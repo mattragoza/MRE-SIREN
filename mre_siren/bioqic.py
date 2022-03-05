@@ -7,6 +7,8 @@ from scipy.ndimage import gaussian_filter
 import torch
 import matplotlib as mpl
 
+from . import phase
+
 
 def nd_coords(shape, extent=2, center=True):
     '''
@@ -38,18 +40,22 @@ def nd_coords(shape, extent=2, center=True):
     return coords
 
 
-def as_nd_coords(t, extent=2, center=True, **kwargs):
+def as_nd_coords(a, extent=2, center=True, **kwargs):
     '''
-    Represent a tensor as coordinates and values.
+    Represent an N-dimensional array as 
+    tensors of coordinates and values.
 
     Args:
-        t: An N-dimensional tensor of M values.
+        a: An N-dimensional array of M values.
     Returns:
         An (M, N) tensor of coordinates.
-        An (M, 1) tensor of values.
+        An (M, D) tensor of values, where
+            D = 2 if t is complex, else D = 1.
     '''
-    coords = nd_coords(t.shape, extent, center)
-    values = t.reshape(-1, 1)
+    coords = nd_coords(a.shape, extent, center)
+    values = a.reshape(-1, 1)
+    if np.iscomplexobj(values):
+        values = np.concatenate([values.real, values.imag], axis=1)
     return (
         torch.as_tensor(coords, **kwargs),
         torch.as_tensor(values, **kwargs)
@@ -114,14 +120,14 @@ class BIOQICDataset(torch.utils.data.Dataset):
         if phase_shift: # subtract estimated phase shifts
             if verbose:
                 print(f'Subtracting phase shifts')
-            phase = self.ds[wave_var]
-            phase_shift = estimate_phase_shift(
-                phase, axis=(2,3,4,5), keepdims=True
+            wave = self.ds[wave_var]
+            phase_shift = phase.estimate_phase_shift(
+                wave, axis=(2,3,4,5), keepdims=True
             )
             if verbose:
                 print(phase_shift[...,0,0,0,0])
-            phase = phase - phase_shift*2*np.pi
-            self.ds[wave_var] = phase
+            wave = wave - phase_shift*2*np.pi
+            self.ds[wave_var] = wave
 
         if segment: # get segmentation mask from magnitude
             if verbose:
@@ -156,6 +162,13 @@ class BIOQICDataset(torch.utils.data.Dataset):
             self.ds = self.ds.coarsen(x=k, y=k, z=k, boundary='pad').mean()
             if segment:
                 self.ds['mask'] = (self.ds['mask'] > 0.5).astype(int)
+
+        # reorder the columns
+        for var in list(self.ds.keys()):
+            if var not in {'magnitude', 'mask'}:
+                temp = self.ds[var]
+                del self.ds[var]
+                self.ds[var] = temp
 
         if verbose:
             print('Getting numpy arrays')
@@ -199,6 +212,7 @@ class BIOQICDataset(torch.utils.data.Dataset):
             v_min = v_max = None
 
             if np.iscomplexobj(self.ds[v]):
+                print(v, 'is complex')
                 hv_images.append(view_xarray(
                     self.ds, var=v, x='x', y='y', func=np.real,
                     cmap=cmap, v_min=v_min, v_max=v_max, scale=scale
@@ -208,6 +222,7 @@ class BIOQICDataset(torch.utils.data.Dataset):
                     cmap=cmap, v_min=v_min, v_max=v_max, scale=scale
                 ))
             else:
+                print(v, 'is real')
                 hv_images.append(view_xarray(
                     self.ds, var=v, x='x', y='y', func=None,
                     cmap=cmap, v_min=v_min, v_max=v_max, scale=scale
@@ -415,23 +430,6 @@ def view_xarray(
     image = image.redim.range(**{var: (v_min, v_max)})
     image = image.hist().redim.label(**{var: var_label})
     return image
-
-
-def estimate_phase_shift(a, **kwargs):
-    '''
-    Estimate the global phase shift
-    in an MRE phase image using the
-    median phase value.
-
-    Args:
-        a: Array of MRE phase values.
-        kwargs: Keyword arguments passed
-            to numpy.median.
-    Returns:
-        The estimated phase shift(s),
-            an integer muliple of 2 pi.
-    '''
-    return np.round(np.median(a, **kwargs) / (2*np.pi))
 
 
 def get_xarray_resolution(xr):
