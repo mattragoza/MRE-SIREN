@@ -97,6 +97,7 @@ class BIOQICDataset(torch.utils.data.Dataset):
         select=None,
         upsample=None,
         downsample=None,
+        normalize=True,
         verbose=False,
         sigma=0.8,
         threshold=120,
@@ -163,6 +164,13 @@ class BIOQICDataset(torch.utils.data.Dataset):
             if segment:
                 self.ds['mask'] = (self.ds['mask'] > 0.5).astype(int)
 
+        if normalize:
+            if verbose:
+                print(f'Normalizing wave variable')
+            self.ds[wave_var] = (
+                self.ds[wave_var] - self.ds[wave_var].mean()
+            ) / self.ds[wave_var].std(ddof=1)
+
         # reorder the columns
         for var in list(self.ds.keys()):
             if var not in {'magnitude', 'mask'}:
@@ -195,7 +203,7 @@ class BIOQICDataset(torch.utils.data.Dataset):
             if verbose:
                 print(self.x.shape, self.u.shape)
 
-    def view(self, var=None, scale=4):
+    def view(self, var=None, scale=4, share=True):
         import holoviews as hv
 
         if var is None:
@@ -213,19 +221,23 @@ class BIOQICDataset(torch.utils.data.Dataset):
 
             if np.iscomplexobj(self.ds[v]):
                 print(v, 'is complex')
+                funcs = [np.real, np.imag]
                 hv_images.append(view_xarray(
-                    self.ds, var=v, x='x', y='y', func=np.real,
-                    cmap=cmap, v_min=v_min, v_max=v_max, scale=scale
+                    self.ds, var=v, x='x', y='y', func=funcs[0],
+                    cmap=cmap, v_min=v_min, v_max=v_max, scale=scale,
+                    share=share
                 ))
                 hv_images.append(view_xarray(
-                    self.ds, var=v, x='x', y='y', func=np.imag,
-                    cmap=cmap, v_min=v_min, v_max=v_max, scale=scale
+                    self.ds, var=v, x='x', y='y', func=funcs[1],
+                    cmap=cmap, v_min=v_min, v_max=v_max, scale=scale,
+                    share=share
                 ))
             else:
                 print(v, 'is real')
                 hv_images.append(view_xarray(
                     self.ds, var=v, x='x', y='y', func=None,
-                    cmap=cmap, v_min=v_min, v_max=v_max, scale=scale
+                    cmap=cmap, v_min=v_min, v_max=v_max, scale=scale,
+                    share=share
                 ))
 
         return hv.Layout(hv_images).cols(1)
@@ -377,7 +389,7 @@ def phase_color_map():
 
 
 def view_xarray(
-    ds, x, y, var, cmap, v_min=None, v_max=None, scale=1, func=None
+    ds, x, y, var, cmap, v_min=None, v_max=None, scale=1, func=None, share=True
 ):
     '''
     Interactively view an xarray
@@ -404,10 +416,11 @@ def view_xarray(
     var_label = var
 
     ref_var = None
-    if var.startswith('my_'):
-        ref_var = var[3:]
-    elif var.endswith('_pred'):
-        ref_var = var[:-5]
+    if share:
+        if var.startswith('my_'):
+            ref_var = var[3:]
+        elif var.endswith('_pred'):
+            ref_var = var[:-5]
     
     if ref_var:
         ref_data = ds[ref_var]
