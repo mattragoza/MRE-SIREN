@@ -31,7 +31,7 @@ def phase_to_complex(phase, conj=False):
         return np.exp(1j*phase)
 
 
-def smooth_phase(phase, sigma=0.65, truncate=3, use_z=False):
+def smooth_phase(phase, sigma=0.65, truncate=3, use_z=True):
     '''
     Apply Gaussian smoothing to phase
     in the complex domain.
@@ -129,25 +129,25 @@ def radial_filter(wave, resolution=0.0015, threshold=100, order=1, use_z=False):
             for g in range(n_grad):
 
                 if use_z:
-                    w = wave[f,m,g]
+                    u = wave[f,m,g]
 
                     # this is applying a convolution
-                    w = np.fft.fftn(w)
-                    w *= k_filter
-                    w = np.fft.ifftn(w)
+                    u = np.fft.fftn(u)
+                    u *= k_filter
+                    u = np.fft.ifftn(u)
 
-                    shear_wave[f,m,g] = w
+                    shear_wave[f,m,g] = u
                     continue
                 
                 for z in range(n_z):
-                    w = wave[f,m,g,z]
+                    u = wave[f,m,g,z]
 
                     # this is applying a convolution
-                    w = np.fft.fftn(w)
-                    w *= k_filter
-                    w = np.fft.ifftn(w)
+                    u = np.fft.fftn(u)
+                    u *= k_filter
+                    u = np.fft.ifftn(u)
 
-                    shear_wave[f,m,g,z] = w
+                    shear_wave[f,m,g,z] = u
     
     return shear_wave
 
