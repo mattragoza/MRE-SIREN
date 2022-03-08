@@ -2,6 +2,10 @@
 
 The goal of this project is to perform elasticity reconstruction for magnetic resonance elastography using sinusoidal representation networks (SIRENs) with physical constraints.
 
+![super_wave_shear_pred_real](notebooks/images/super_wave_shear_pred_real.png)
+
+This image shows the continuous representations of a shear wave image learned using SIREN, which enables super-resolution and solving of partial differental equations.
+
 ## Environment setup
 
 ```
