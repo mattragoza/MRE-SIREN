@@ -40,8 +40,13 @@ class SIREN(nn.Sequential):
 
     https://github.com/vsitzmann/siren
     '''
-    def __init__(self, n_input, n_output, n_hidden, n_layers, w0=30):
+    def __init__(self, n_input, out_shape, n_hidden, n_layers, w0=30):
         assert n_layers > 0
+
+        n_output = 1
+        for d in out_shape:
+            n_output *= d
+        self.out_shape = out_shape
 
         modules = []
         for i in range(n_layers):
@@ -65,8 +70,6 @@ class SIREN(nn.Sequential):
             with torch.no_grad():
                 m.linear.weight.uniform_(-w_std, w_std)
 
-    def forward(self, x, split=False):
+    def forward(self, x):
         x = super().forward(x)
-        if split:
-            x = torch.split(x, 1, dim=1)
-        return x
+        return x.reshape(-1, *self.out_shape)

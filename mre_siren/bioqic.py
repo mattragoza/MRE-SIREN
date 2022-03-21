@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 from functools import lru_cache
 import numpy as np
@@ -10,7 +11,7 @@ import matplotlib as mpl
 from . import phase
 
 
-def nd_coords(shape, extent=2, center=True):
+def nd_coords(shape, resolution=1, center=False):
     '''
     Return a tensor of N-dimensional
     coordinates for a grid with the
@@ -18,17 +19,15 @@ def nd_coords(shape, extent=2, center=True):
 
     Args:
         shape: The shape of the N-dimensional grid.
-        extent: The spatial extent of the grid.
-        center: Center the coordinates at 0.
+        resolution: Spatial resolution of grid dimensions.
+        center: Subtract mean from spatial coordinates.
     Returns:
         An (M, N) tensor of coordinates.
     '''
     n_dims = len(shape)
-    shape = np.array(shape)
-    extent = np.broadcast_to(extent, (n_dims,))
-    resolution = extent / shape
 
     # for each dim, get d points spaced according to resolution
+    resolution = np.broadcast_to(resolution, (n_dims,))
     dims = [torch.arange(d)*r for d,r in zip(shape, resolution)]
 
     # get n-demsenional coordinates from dims
@@ -40,22 +39,29 @@ def nd_coords(shape, extent=2, center=True):
     return coords
 
 
-def as_nd_coords(a, extent=2, center=True, **kwargs):
+def as_nd_coords(a, n=3, resolution=1, center=False, **kwargs):
     '''
     Represent an N-dimensional array as 
     tensors of coordinates and values.
 
     Args:
         a: An N-dimensional array of M values.
+        n: The spatial dimensionality N.
+        resolution: Spatial resolution of each dimension.
+        center: Subtract mean of coordinates.
+        **kwargs: Passed to torch.as_tensor
     Returns:
         An (M, N) tensor of coordinates.
         An (M, D) tensor of values, where
             D = 2 if t is complex, else D = 1.
     '''
-    coords = nd_coords(a.shape, extent, center)
-    values = a.reshape(-1, 1)
+    # get coordinates and values
+    coords = nd_coords(a.shape[:n], resolution[:n], center)
+    values = a.reshape(-1, *a.shape[n:])
+
     if np.iscomplexobj(values):
-        values = np.concatenate([values.real, values.imag], axis=1)
+        values = np.stack([values.real, values.imag], axis=-1)
+
     return (
         torch.as_tensor(coords, **kwargs),
         torch.as_tensor(values, **kwargs)
@@ -97,7 +103,6 @@ class BIOQICDataset(torch.utils.data.Dataset):
         select=None,
         upsample=None,
         downsample=None,
-        normalize=True,
         verbose=False,
         sigma=0.8,
         threshold=120,
@@ -114,19 +119,20 @@ class BIOQICDataset(torch.utils.data.Dataset):
         else:
             self.ds = ds.copy()
             assert wave_var, 'must specify wave variable'
-        
+
         self.wave_var = wave_var
-        print(wave_var)
+        if verbose:
+            print(wave_var, self.ds[wave_var].shape)
 
         if phase_shift: # subtract estimated phase shifts
             if verbose:
                 print(f'Subtracting phase shifts')
             wave = self.ds[wave_var]
+            axes = [i for i,d in enumerate(self.ds.dims) if d in 'txyz']
+            print(axes)
             phase_shift = phase.estimate_phase_shift(
-                wave, axis=(2,3,4,5), keepdims=True
+                wave, axis=axes, keepdims=True
             )
-            if verbose:
-                print(phase_shift[...,0,0,0,0])
             wave = wave - phase_shift*2*np.pi
             self.ds[wave_var] = wave
 
@@ -164,13 +170,6 @@ class BIOQICDataset(torch.utils.data.Dataset):
             if segment:
                 self.ds['mask'] = (self.ds['mask'] > 0.5).astype(int)
 
-        if normalize:
-            if verbose:
-                print(f'Normalizing wave variable')
-            self.ds[wave_var] = (
-                self.ds[wave_var] - self.ds[wave_var].mean()
-            ) / self.ds[wave_var].std(ddof=1)
-
         # reorder the columns
         for var in list(self.ds.keys()):
             if var not in {'magnitude', 'mask'}:
@@ -180,15 +179,16 @@ class BIOQICDataset(torch.utils.data.Dataset):
 
         if verbose:
             print('Getting numpy arrays')
+
         self.magnitude = self.ds['magnitude'].to_numpy()
         self.wave = self.ds[wave_var].to_numpy()
         if segment:
             self.mask = self.ds['mask'].to_numpy()
+
         if verbose:
             print(self.wave.shape)
 
-        if make_coords:
-            # convert to coordinate representation
+        if make_coords: # convert to coordinate representation
             if verbose:
                 print('Getting resolution, coordinates, and values')
 
@@ -196,14 +196,36 @@ class BIOQICDataset(torch.utils.data.Dataset):
             if verbose:
                 print(self.resolution)
 
-            self.x, self.u = as_nd_coords(self.wave, **kwargs)
+            # move spatial dims to front
+            n_dims = self.wave.ndim
+            spatial_dims = [-2, -1, -3]
+            spatial_dims = [
+                d%n_dims for d in spatial_dims
+            ]
+            self.permutation = spatial_dims + [
+                d for d in range(n_dims) if d not in spatial_dims
+            ]
+            if verbose:
+                print(self.permutation)
+
+            self.magnitude = self.magnitude.transpose(self.permutation)
+            self.wave = self.wave.transpose(self.permutation)
             if segment:
-                self.m = (self.mask.reshape(-1) > 0)
+                self.mask = self.mask.transpose(self.permutation)
+            self.resolution = self.resolution[self.permutation]
+
+            self.x, self.u, = as_nd_coords(
+                self.wave, resolution=self.resolution, center=True, **kwargs
+            )
+            if segment:
+                mask = self.mask.reshape(-1, *self.mask.shape[3:])
+                mask = self.mask.reshape(mask.shape[0], -1)
+                self.m = (mask > 0).all(axis=1)
 
             if verbose:
                 print(self.x.shape, self.u.shape)
 
-    def view(self, var=None, scale=4, share=True):
+    def view(self, var=None, scale=4, share=False):
         import holoviews as hv
 
         if var is None:
@@ -271,6 +293,9 @@ def load_mat_data(mat_file, verbose=False):
         # Please use HDF reader for matlab v7.3 files
         data = h5py.File(mat_file)
         rev_axes = False
+    except:
+        print(mat_file, file=sys.stderr)
+        raise
     if verbose:
         print(mat_file)
         print_mat_info(data, level=1)
