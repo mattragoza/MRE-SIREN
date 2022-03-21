@@ -80,25 +80,23 @@ function MDEV()
     % lowpass filtering using butterworth
     shearWaveField = radialFilter(waveField, inplaneResolution, (parameters.radialFilter));
 
-    % main MVED inversion using Laplace operator
+    % main MDEV inversion using Laplace operator
     [absG, phi, strain] = laplaceInversion(shearWaveField, inplaneResolution, frequency, (parameters.laplaceInversion));
 
     phase_smoothed = smoothedPhase;
-    class(phase_smoothed)
     save('data/BIOQIC/phantom_smoothed.mat', 'magnitude', 'phase_smoothed');
 
     magnitude = resample(magnitude, 1, 4, 'Dimension', 4);
     wave = waveField;
     wave_shear = shearWaveField;
-    class(wave)
+    'shearWaveField real'
+    [min(real(shearWaveField(:))), max(real(shearWaveField(:)))]
+    'shearWaveField imag'
+    [min(imag(shearWaveField(:))), max(imag(shearWaveField(:)))]
     save('data/BIOQIC/phantom_wave.mat', 'magnitude', 'wave');
-    class(wave_shear)
     save('data/BIOQIC/phantom_wave_shear.mat', 'magnitude', 'wave_shear');
 
     magnitude = mean(magnitude, [4, 5, 6]);
-    class(absG)
-    class(phi)
-    class(strain)
     save('data/BIOQIC/phantom_MDEV.mat', 'magnitude', 'absG', 'phi', 'strain');
 end
 
@@ -178,6 +176,11 @@ end
 
 function shearWaveField = radialFilter(waveField, inplaneResolution, parameters)
 
+    'waveField real'
+    [min(real(waveField(:))), max(real(waveField(:)))]
+    'waveField imag'
+    [min(imag(waveField(:))), max(imag(waveField(:)))]
+
     % get the dimensions
     n1 = size(waveField,1);% number of rows
     n2 = size(waveField,2);% number of columns
@@ -214,6 +217,11 @@ function shearWaveField = radialFilter(waveField, inplaneResolution, parameters)
             end
         end
     end
+
+    'shearWaveField real'
+    [min(real(shearWaveField(:))), max(real(shearWaveField(:)))]
+    'shearWaveField imag'
+    [min(imag(shearWaveField(:))), max(imag(shearWaveField(:)))]
 end
 
 function [absG, phi, strain] = laplaceInversion(shearWaveField, inplaneResolution, frequency, parameters)

@@ -65,7 +65,9 @@ def grad_wrap_FFT(phase, resolution=0.0015, n_harmonics=1):
     n_freq, n_MEG, n_t, n_z, n_x, n_y = phase.shape
 
     # loop for unwrapping and fft
-    wave_field = np.zeros((n_freq, n_MEG, 2, n_z, n_x, n_y), dtype=np.complex128)
+    wave_field = np.zeros(
+        (n_freq, n_MEG, 2, n_z, n_x, n_y), dtype=np.complex128
+    )
     
     n_dims = 2
     grad = np.zeros((n_dims, n_t, n_z, n_x, n_y), dtype=np.complex128)
@@ -79,13 +81,13 @@ def grad_wrap_FFT(phase, resolution=0.0015, n_harmonics=1):
                 p_conj = phase_to_complex(p, conj=True)
                 
                 # compute spatial gradient
-                dpdz, dpdx, dpdy = np.gradient(p_comp, resolution)
+                p_z, p_x, p_y = np.gradient(p_comp, resolution)
                 
                 # in-plane derivative components
                 # NOTE: it's VERY important to multiply by p_conj here
                 #  instead of p or p_comp. I don't fully understand why.
-                grad[0,t] = (dpdy * p_conj).imag
-                grad[1,t] = (dpdx * p_conj).imag
+                grad[0,t] = (p_y * p_conj).imag
+                grad[1,t] = (p_x * p_conj).imag
             
             # fourier transformation and selection of harmonic
             fourier1 = np.fft.fft(grad[0], axis=0);
@@ -97,28 +99,32 @@ def grad_wrap_FFT(phase, resolution=0.0015, n_harmonics=1):
     return wave_field
 
 
-def calc_k_space_filter(n, resolution):
-    return -(np.arange(n) - n//2) / (n * resolution)
+def calc_k_filter(n, resolution):
+    # I verified this against MATLAB code
+    return -(np.arange(n) - np.fix(n/2)) / (n * resolution)
 
 
 def radial_filter(wave, resolution=0.0015, threshold=100, order=1, use_z=False):
     
     n_freq, n_MEG, n_grad, n_z, n_x, n_y = wave.shape
-    
-    n_dims = 2
+
     # create k-space filter (spatial frequency space)
     nax = np.newaxis
     if use_z:
-        k_z = calc_k_space_filter(n_z, resolution)[:,nax,nax]
-        k_x = calc_k_space_filter(n_x, resolution)[nax,:,nax]
-        k_y = calc_k_space_filter(n_y, resolution)[nax,nax,:]
-        abs_k = np.sqrt(k_z**2 + k_x**2 + k_y**2)
+        k_z = calc_k_filter(n_z, resolution)
+        k_x = calc_k_filter(n_x, resolution)
+        k_y = calc_k_filter(n_y, resolution)
+        abs_k = np.sqrt(
+            np.abs(k_z[:,nax,nax])**2 +
+            np.abs(k_x[nax,:,nax])**2 +
+            np.abs(k_y[nax,nax,:])**2
+        )
     else:
-        k_x = calc_k_space_filter(n_x, resolution)[:,nax]
-        k_y = calc_k_space_filter(n_y, resolution)[nax,:]
-        abs_k = np.sqrt(k_x**2 + k_y**2)
+        k_x = calc_k_filter(n_x, resolution)
+        k_y = calc_k_filter(n_y, resolution)
+        abs_k = np.sqrt(np.abs(k_x[:,nax])**2 + np.abs(k_y[nax,:])**2)
     
-    k_filter = 1/(1 + (abs_k/threshold)**(2*order))
+    k_filter = 1 / (1 + (abs_k/threshold)**(2*order))
     k_filter = np.fft.ifftshift(k_filter)
 
     shear_wave = wave.copy()
@@ -133,7 +139,7 @@ def radial_filter(wave, resolution=0.0015, threshold=100, order=1, use_z=False):
 
                     # this is applying a convolution
                     u = np.fft.fftn(u)
-                    u *= k_filter
+                    u = u * k_filter
                     u = np.fft.ifftn(u)
 
                     shear_wave[f,m,g] = u
@@ -144,7 +150,7 @@ def radial_filter(wave, resolution=0.0015, threshold=100, order=1, use_z=False):
 
                     # this is applying a convolution
                     u = np.fft.fftn(u)
-                    u *= k_filter
+                    u = u * k_filter
                     u = np.fft.ifftn(u)
 
                     shear_wave[f,m,g,z] = u
