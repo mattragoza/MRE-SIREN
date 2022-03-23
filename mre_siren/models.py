@@ -43,9 +43,7 @@ class SIREN(nn.Sequential):
     def __init__(self, n_input, out_shape, n_hidden, n_layers, w0=30):
         assert n_layers > 0
 
-        n_output = 1
-        for d in out_shape:
-            n_output *= d
+        n_output = torch.prod(torch.as_tensor(out_shape))
         self.out_shape = out_shape
 
         modules = []
@@ -73,3 +71,19 @@ class SIREN(nn.Sequential):
     def forward(self, x):
         x = super().forward(x)
         return x.reshape(-1, *self.out_shape)
+
+
+class NullModel(nn.Module):
+    '''
+    An intercept-only model.
+    '''
+    def __init__(self, out_shape, *args, **kwargs):
+        super().__init__()
+        self.param = nn.Parameter(torch.zeros(out_shape))
+
+    def forward(self, x):
+        shape = x.shape[0:1] + self.param.shape
+        return self.param.unsqueeze(0).expand(shape)
+
+    def init_weights(self, *args, **kwargs):
+        pass
