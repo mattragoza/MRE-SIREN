@@ -1,1 +1,1 @@
-from . import phase, bioqic, models
+from . import phase, bioqic, models, pde
