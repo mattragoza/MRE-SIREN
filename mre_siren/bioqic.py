@@ -42,14 +42,15 @@ def nd_coords(shape, resolution=1, center=False):
 def as_nd_coords(a, n=3, resolution=1, center=False, **kwargs):
     '''
     Represent an N-dimensional array as 
-    tensors of coordinates and values.
+    tensors of spatial coordinates and values.
 
     Args:
         a: An N-dimensional array of M values.
-        n: The spatial dimensionality N.
-        resolution: Spatial resolution of each dimension.
+        n: The spatial dimensionality N, assuming
+            that these are the first N dimensions.
+        resolution: Resolution of each dimension.
         center: Subtract mean of coordinates.
-        **kwargs: Passed to torch.as_tensor
+        **kwargs: Passed to torch.as_tensor.
     Returns:
         An (M, N) tensor of coordinates.
         An (M, D) tensor of values, where
@@ -127,21 +128,16 @@ class BIOQICDataset(torch.utils.data.Dataset):
         if phase_shift: # subtract estimated phase shifts
             if verbose:
                 print(f'Subtracting phase shifts')
-            wave = self.ds[wave_var]
             axes = [i for i,d in enumerate(self.ds.dims) if d in 'txyz']
-            print(axes)
-            phase_shift = phase.estimate_phase_shift(
-                wave, axis=axes, keepdims=True
+            self.ds[wave_var] = phase.subtract_phase_shift(
+                self.ds[wave_var], axis=axes, keepdims=True
             )
-            wave = wave - phase_shift*2*np.pi
-            self.ds[wave_var] = wave
 
         if segment: # get segmentation mask from magnitude
             if verbose:
                 print('Computing segmentation mask')
-            magnitude = self.ds['magnitude']
             mask = (
-                gaussian_filter(magnitude, sigma=sigma) > threshold
+                gaussian_filter(self.ds['magnitude'], sigma=sigma) > threshold
             ).astype(int)
             self.ds['mask'] = (self.ds.dims, mask)
 
@@ -225,44 +221,46 @@ class BIOQICDataset(torch.utils.data.Dataset):
             if verbose:
                 print(self.x.shape, self.u.shape)
 
-    def view(self, var=None, scale=4, share=False):
+    def view(
+        self, var=None, scale=4, share=False, pct=2.5, n_cols=2, verbose=True
+    ):
         import holoviews as hv
 
-        if var is None:
+        if var is None: # view all variables
             var = list(self.ds.keys())
+
+        if verbose:
+            print(f'Viewing {var}')
 
         hv_images = []
         for v in as_list(var):
+
             if 'wave' in v or 'phase' in v:
                 cmap = phase_color_map()
-                v_min, v_max = (-2*np.pi, 2*np.pi)
             else:
                 cmap = magnitude_color_map()
-
             v_min = v_max = None
 
             if np.iscomplexobj(self.ds[v]):
-                print(v, 'is complex')
                 funcs = [np.real, np.imag]
                 hv_images.append(view_xarray(
                     self.ds, var=v, x='x', y='y', func=funcs[0],
                     cmap=cmap, v_min=v_min, v_max=v_max, scale=scale,
-                    share=share
+                    share=share, pct=pct, verbose=verbose
                 ))
                 hv_images.append(view_xarray(
                     self.ds, var=v, x='x', y='y', func=funcs[1],
                     cmap=cmap, v_min=v_min, v_max=v_max, scale=scale,
-                    share=share
+                    share=share, pct=pct, verbose=verbose
                 ))
             else:
-                print(v, 'is real')
                 hv_images.append(view_xarray(
                     self.ds, var=v, x='x', y='y', func=None,
                     cmap=cmap, v_min=v_min, v_max=v_max, scale=scale,
-                    share=share
+                    share=share, pct=pct, verbose=verbose
                 ))
 
-        return hv.Layout(hv_images).cols(1)
+        return hv.Layout(hv_images).cols(n_cols)
 
     def __getitem__(self, idx):
         return self.x[idx], self.u[idx], self.m[idx]
@@ -414,7 +412,9 @@ def phase_color_map():
 
 
 def view_xarray(
-    ds, x, y, var, cmap, v_min=None, v_max=None, scale=1, func=None, share=True
+    ds, x, y, var, cmap,
+    v_min=None, v_max=None, scale=1, func=None, share=True, pct=2.5,
+    verbose=False
 ):
     '''
     Interactively view an xarray
@@ -429,37 +429,45 @@ def view_xarray(
         y: The y dimension.
         var: The data to view.
         cmap: Color map object.
-        v_min: Minimum color value.
-        v_max: Maximum color value.
+        v_min: Minimum color value,
+            or None to infer.
+        v_max: Maximum color value,
+            or None to infer.
         scale: Figure scale.
         func: View function of data.
+        share: Infer v_range from reference data,
+            if var starts with my_ or pred_.
+        pct: Percentile for inferring v_range.
     Returns:
         A holoviews Image object.
     '''
     import holoviews as hv
+
     data = ds[var]
     var_label = var
 
     ref_var = None
-    if share:
+    if share: # determine reference variable
         if var.startswith('my_'):
             ref_var = var[3:]
         elif var.endswith('_pred'):
             ref_var = var[:-5]
-    
     if ref_var:
         ref_data = ds[ref_var]
 
-    if func is not None:
+    if func is not None: # apply function to data
         data = func(data)
         var_label = f'{func.__name__}({var})'
         if ref_var:
             ref_data = func(ref_data)
 
+    # infer value range from data or reference data
     if v_min is None:
-        v_min = np.percentile(ref_data if ref_var else data, 2.5)
+        v_min = np.percentile(ref_data if ref_var else data, pct)
     if v_max is None:
-        v_max = np.percentile(ref_data if ref_var else data, 97.5)
+        v_max = np.percentile(ref_data if ref_var else data, 100-pct)
+
+    print(var, ref_var, func, v_min, v_max)
 
     image = hv.Dataset(data).to(hv.Image, [x, y], dynamic=True)
     image = image.opts(

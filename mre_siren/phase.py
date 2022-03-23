@@ -19,6 +19,10 @@ def estimate_phase_shift(a, **kwargs):
     return np.round(np.median(a, **kwargs) / (2*np.pi))
 
 
+def subtract_phase_shift(a, **kwargs):
+    return a - estimate_phase_shift(a, **kwargs) * 2*np.pi
+
+
 def phase_to_complex(phase, conj=False):
     '''
     Convert phase to complex value.
