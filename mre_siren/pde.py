@@ -1,6 +1,24 @@
 import torch
 
 
+def as_matrix(x):
+    '''
+    Args:
+        x: A tensor with any number of dims.
+    Returns:
+        x: The same tensor reshaped as a matrix,
+            assuming the first dim is a batch dim.
+    '''
+    if x.ndim == 0: # scalar
+        return x.broadcast_to(1, 1)
+    elif x.ndim == 1: # vector
+        return x.unsqueeze(1)
+    elif x.ndim > 2: # higher rank tensor
+        return x.reshape(x.shape[0], -1)
+    else: # already a matrix
+        return x
+
+
 def jacobian(y, x):
     '''
     Args:
@@ -10,16 +28,21 @@ def jacobian(y, x):
         jac: (N, M, K) Jacobian tensor
             where jac_ijk = dy_ij/dx_ik.
     '''
+    x, y = as_matrix(x), as_matrix(y)
     N, M = y.shape
     N, K = x.shape
     assert y.shape == (N, M), y.shape
     ones = torch.ones_like(y[:,0])
     jac = []
-    for j in range(M): 
-        grad = torch.autograd.grad(y[:,j], x, grad_outputs=ones, create_graph=True)[0]
+    for j in range(M):
+        # each row of the Jacobian is the gradient of a y component wrt x
+        grad = torch.autograd.grad(y[:,j], x, grad_outputs=ones, create_graph=True, allow_unused=True)[0]
+        if grad is None:
+            grad = torch.zeros_like(x)
         jac.append(grad)
     
     jac = torch.stack(jac, dim=1)
+    assert jac.shape == (N, M, K), jac.shape
     return jac
 
 
@@ -32,12 +55,14 @@ def divergence(y, x):
         div: (N,) divergence tensor
             where div_i = sum_j dy_ij/dx_ij.
     '''
+    x, y = as_matrix(x), as_matrix(y)
     N, K = x.shape
     assert y.shape == (N, K), y.shape
     jac = jacobian(y, x)
-    assert jac.shape == (N, K, K)
+    assert jac.shape == (N, K, K), jac.shape
     div = 0
     for j in range(K):
+        # divergence is the trace of the Jacobian
         div = div + jac[:,j,j]
     return div
 
@@ -49,17 +74,21 @@ def laplacian(y, x):
         x: (N, K) tensor of inputs.
     Returns:
         lap: (N, M) Laplacian tensor,
-            where lap_ij = sum_k d(dy_ij/dx_ik)_ijk/dx_ik.
+            where lap_ij = sum_k d^2 y_ij/dx_ik^2.
     '''
+    shape = y.shape
+    x, y = as_matrix(x), as_matrix(y)
     N, M = y.shape
     N, K = x.shape
-    assert y.shape == (N, M)
+    assert y.shape == (N, M), y.shape
     jac = jacobian(y, x)
-    assert jac.shape == (N, M, K)
+    assert jac.shape == (N, M, K), jac.shape
     lap = []
     for j in range(M):
+        # the Laplacian is the divergence of the gradient
+        #   i.e. lap_ij = sum_k d^2 y_ij / dx_ik^2
         lap.append(divergence(jac[:,j,:], x))
-    return torch.stack(lap, dim=1)
+    return torch.stack(lap, dim=1).reshape(*shape)
 
 
 def compute_pde_loss(x, u, G, frequency, density):
