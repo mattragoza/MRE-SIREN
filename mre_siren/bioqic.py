@@ -115,20 +115,22 @@ class BIOQICDataset(torch.utils.data.Dataset):
         assert has(data_root) ^ has(ds), 'must provide either data_root or ds'
 
         if data_root: # load MATLAB phantom data files
+            print('Loading data set from disk')
             self.ds, wave_var = load_bioqic_dataset(
                 data_root, mat_base, verbose=verbose
             )
         else:
+            print('Using provided data set')
             self.ds = ds.copy()
             assert wave_var, 'must specify wave variable'
 
         self.wave_var = wave_var
         if verbose:
-            print(wave_var, self.ds[wave_var].shape)
+            print(f'Wave variable is {wave_var} {self.ds[wave_var].shape}')
 
         if phase_shift: # subtract estimated phase shifts
             if verbose:
-                print(f'Subtracting phase shifts')
+                print(f'Subtracting estimated phase shifts')
             axes = [i for i,d in enumerate(self.ds.dims) if d in 'txyz']
             self.ds[wave_var] = phase.subtract_phase_shift(
                 self.ds[wave_var], axis=axes, keepdims=True
@@ -136,7 +138,7 @@ class BIOQICDataset(torch.utils.data.Dataset):
 
         if segment: # get segmentation mask from magnitude
             if verbose:
-                print('Computing segmentation mask')
+                print('Computing segmentation mask from magnitude')
             mask = (
                 gaussian_filter(self.ds['magnitude'], sigma=sigma) > threshold
             ).astype(int)
@@ -144,13 +146,13 @@ class BIOQICDataset(torch.utils.data.Dataset):
 
         if select is not None:
             if verbose:
-                print(f'Selecting subset {select}')
+                print(f'Selecting data subset {select}')
             self.ds = self.ds.sel(select)
 
         # temporal upsampling
         if upsample is not None and upsample > 1:
             if verbose:
-                print(f'Upsampling by factor {upsample}')
+                print(f'Temporal upsampling by factor {upsample}')
             t = nd_coords(
                 shape=(upsample*self.ds.dims['t'],),
                 extent=1,
@@ -161,7 +163,7 @@ class BIOQICDataset(torch.utils.data.Dataset):
         # spatial downsampling
         if downsample is not None and downsample > 1:
             if verbose:
-                print(f'Downsampling by factor {downsample}')
+                print(f'Spatial downsampling by factor {downsample}')
             k = downsample
             self.ds = self.ds.coarsen(x=k, y=k, z=k, boundary='pad').mean()
             if segment:
@@ -169,7 +171,7 @@ class BIOQICDataset(torch.utils.data.Dataset):
 
         if invert: # perform Laplace inversion
             if verbose:
-                print('Computing Laplace inversion')
+                print('Performing discrete Laplace inversion')
             laplace_wave, abs_G, phi_G = phase.laplace_invert(
                 self.ds[self.wave_var], self.ds.coords['frequency']
             )
@@ -197,11 +199,11 @@ class BIOQICDataset(torch.utils.data.Dataset):
 
         if make_coords: # convert to coordinate representation
             if verbose:
-                print('Getting resolution, coordinates, and values')
+                print('Getting spatial coordinate representation')
 
             self.resolution = get_xarray_resolution(self.ds)
             if verbose:
-                print(self.resolution)
+                print(f'resolution = {self.resolution}')
 
             # move spatial dims to front
             n_dims = self.wave.ndim
@@ -213,7 +215,7 @@ class BIOQICDataset(torch.utils.data.Dataset):
                 d for d in range(n_dims) if d not in spatial_dims
             ]
             if verbose:
-                print(self.permutation)
+                print(f'permutation = {self.permutation}')
 
             self.magnitude = self.magnitude.transpose(self.permutation)
             self.wave = self.wave.transpose(self.permutation)
@@ -221,6 +223,7 @@ class BIOQICDataset(torch.utils.data.Dataset):
                 self.mask = self.mask.transpose(self.permutation)
             self.resolution = self.resolution[self.permutation]
 
+            # get the nd coordinates and values
             self.x, self.u, = as_nd_coords(
                 self.wave, resolution=self.resolution, center=True, **kwargs
             )
@@ -230,7 +233,10 @@ class BIOQICDataset(torch.utils.data.Dataset):
                 self.m = (mask > 0).all(axis=1)
 
             if verbose:
-                print(self.x.shape, self.u.shape)
+                print(f'x shape = {self.x.shape}\nu shape = {self.u.shape}')
+
+        if verbose:
+            print(f'Data set initialized')
 
     def view(
         self, var=None, scale=4, share=False, pct=2.5, n_cols=2, verbose=True
