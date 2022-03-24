@@ -36,7 +36,9 @@ def jacobian(y, x):
     jac = []
     for j in range(M):
         # each row of the Jacobian is the gradient of a y component wrt x
-        grad = torch.autograd.grad(y[:,j], x, grad_outputs=ones, create_graph=True, allow_unused=True)[0]
+        grad = torch.autograd.grad(y[:,j], x,
+            grad_outputs=ones, create_graph=True, allow_unused=True
+        )[0]
         if grad is None:
             grad = torch.zeros_like(x)
         jac.append(grad)
