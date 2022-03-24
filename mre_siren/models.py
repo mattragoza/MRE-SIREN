@@ -58,17 +58,29 @@ class SIREN(nn.Sequential):
             ))
         super().__init__(*modules)
 
-    def init_weights(self, c=6, input_scale=1, output_scale=1):
+    def init_weights(self, c=6, input_scale=1, output_scale=1, output_loc=0):
         for i, m in enumerate(self.children()):
             n_input = m.linear.weight.shape[-1]
+
             if i == 0:
-                w_std = 1 / (n_input * input_scale)
+                w_std = 1 / n_input
             else:
                 w_std = math.sqrt(c / n_input)
-            if i + 1 == len(self):
-                w_std *= output_scale
+
             with torch.no_grad():
                 m.linear.weight.uniform_(-w_std, w_std)
+
+                if i == 0:
+                    m.linear.weight /= torch.as_tensor(
+                        input_scale, device=m.linear.weight.device
+                    ).unsqueeze(0)
+
+                if i + 1 == len(self):
+                    m.linear.weight *= torch.as_tensor(
+                        output_scale, device=m.linear.weight.device
+                    ).unsqueeze(1)
+                    m.linear.bias[...] = output_loc
+
 
     def forward(self, x):
         x = super().forward(x)
