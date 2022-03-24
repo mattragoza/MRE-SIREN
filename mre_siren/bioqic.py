@@ -100,6 +100,7 @@ class BIOQICDataset(torch.utils.data.Dataset):
         mat_base='phantom_wave_shear.mat',
         phase_shift=False,
         segment=True,
+        invert=False,
         make_coords=True,
         select=None,
         upsample=None,
@@ -165,6 +166,16 @@ class BIOQICDataset(torch.utils.data.Dataset):
             self.ds = self.ds.coarsen(x=k, y=k, z=k, boundary='pad').mean()
             if segment:
                 self.ds['mask'] = (self.ds['mask'] > 0.5).astype(int)
+
+        if invert: # perform Laplace inversion
+            if verbose:
+                print('Computing Laplace inversion')
+            laplace_wave, abs_G, phi_G = phase.laplace_invert(
+                self.ds[self.wave_var], self.ds.coords['frequency']
+            )
+            self.ds[f'laplace_{self.wave_var}'] = (self.ds.dims, laplace_wave)
+            self.ds['abs_G'] = abs_G
+            self.ds['phi_G'] = phi_G
 
         # reorder the columns
         for var in list(self.ds.keys()):
@@ -244,7 +255,7 @@ class BIOQICDataset(torch.utils.data.Dataset):
             if np.iscomplexobj(self.ds[v]):
                 if 'elast' in v:
                     funcs = [np.absolute, xr.ufuncs.angle]
-                    cmap = [magnitude_color_map(), phase_color_map()]
+                    cmap = [magnitude_color_map(), magnitude_color_map()]
                     share_vlim = False
                 else:
                     funcs = [np.real, np.imag]

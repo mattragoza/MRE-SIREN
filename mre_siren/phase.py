@@ -197,3 +197,28 @@ def laplace_inversion(
     absG = numer_absG / (denom_absG + eps)
 
     return absG, phi, strain
+
+
+def laplace_invert(
+    u, frequency, resolution=0.0015, density=1000, eps=1e-8
+):
+    # assume last three dimensions are z, x, y
+    u_z,  u_x,  u_y  = np.gradient(u,   resolution, axis=(-3,-2,-1))
+    u_zz, u_zx, u_zy = np.gradient(u_z, resolution, axis=(-3,-2,-1))
+    u_xz, u_xx, u_xy = np.gradient(u_x, resolution, axis=(-3,-2,-1))
+    u_yz, u_yx, u_yy = np.gradient(u_y, resolution, axis=(-3,-2,-1))
+    laplace_u = u_xx + u_yy #+ u_zz
+
+    # solve for the complex shear modulus
+    numer_abs_G = density * (2*np.pi * frequency)**2 * np.abs(u)
+    denom_abs_G = np.abs(laplace_u)
+
+    numer_cos_G = -(laplace_u.real * u.real + laplace_u.imag * u.imag)
+    denom_cos_G = np.abs(laplace_u) * np.abs(u)
+    
+    axes = tuple(range(u.ndim-3))
+    abs_G = numer_abs_G.sum(axis=axes) / denom_abs_G.sum(axis=axes)
+    cos_G = numer_cos_G.sum(axis=axes) / denom_cos_G.sum(axis=axes)
+    phi_G = np.arccos(cos_G)
+
+    return laplace_u, abs_G, phi_G
