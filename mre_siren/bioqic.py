@@ -242,16 +242,24 @@ class BIOQICDataset(torch.utils.data.Dataset):
             v_min = v_max = None
 
             if np.iscomplexobj(self.ds[v]):
-                funcs = [np.real, np.imag]
+                if 'elast' in v:
+                    funcs = [np.absolute, xr.ufuncs.angle]
+                    cmap = [magnitude_color_map(), phase_color_map()]
+                    share_vlim = False
+                else:
+                    funcs = [np.real, np.imag]
+                    cmap = [cmap, cmap]
+                    share_vlim = True
+
                 hv_images.append(view_xarray(
                     self.ds, var=v, x='x', y='y', func=funcs[0],
-                    cmap=cmap, v_min=v_min, v_max=v_max, scale=scale,
-                    share=share, pct=pct, verbose=verbose
+                    cmap=cmap[0], v_min=v_min, v_max=v_max, scale=scale,
+                    share=share, pct=pct, verbose=verbose, share_vlim=share_vlim
                 ))
                 hv_images.append(view_xarray(
                     self.ds, var=v, x='x', y='y', func=funcs[1],
-                    cmap=cmap, v_min=v_min, v_max=v_max, scale=scale,
-                    share=share, pct=pct, verbose=verbose
+                    cmap=cmap[1], v_min=v_min, v_max=v_max, scale=scale,
+                    share=share, pct=pct, verbose=verbose, share_vlim=share_vlim
                 ))
             else:
                 hv_images.append(view_xarray(
@@ -414,7 +422,7 @@ def phase_color_map():
 def view_xarray(
     ds, x, y, var, cmap,
     v_min=None, v_max=None, scale=1, func=None, share=True, pct=2.5,
-    verbose=False
+    verbose=False, share_vlim=True
 ):
     '''
     Interactively view an xarray
@@ -473,9 +481,15 @@ def view_xarray(
     image = image.opts(
         cmap=cmap, width=scale*ds.dims[x], height=scale*ds.dims[y]
     )
-    image = image.redim.range(**{var: (v_min, v_max)})
+    image = image.redim.label(**{var: var_label})
     image = image.hist().redim.label(**{var: var_label})
-    return image
+    if share_vlim:
+        return image.redim.range(**{var: (v_min, v_max)})
+    else:
+        return image.opts(
+            hv.opts.Image(clim=(v_min, v_max)),
+            hv.opts.Histogram(xlim=(v_min, v_max), axiswise=True)
+        )
 
 
 def get_xarray_resolution(xr):
