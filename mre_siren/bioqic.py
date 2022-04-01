@@ -205,14 +205,15 @@ class BIOQICDataset(torch.utils.data.Dataset):
             if verbose:
                 print(f'resolution = {self.resolution}')
 
-            # move spatial dims to front
+            # move frequency and spatial dims to front
             n_dims = self.wave.ndim
+            frequency_dim = 0
             spatial_dims = [-2, -1, -3]
-            spatial_dims = [
+            coord_dims = [frequency_dim] + [
                 d%n_dims for d in spatial_dims
             ]
-            self.permutation = spatial_dims + [
-                d for d in range(n_dims) if d not in spatial_dims
+            self.permutation = coord_dims + [
+                d for d in range(n_dims) if d not in coord_dims
             ]
             if verbose:
                 print(f'permutation = {self.permutation}')
@@ -225,15 +226,19 @@ class BIOQICDataset(torch.utils.data.Dataset):
 
             # get the nd coordinates and values
             self.x, self.u, = as_nd_coords(
-                self.wave, resolution=self.resolution, center=True, **kwargs
+                self.wave, n=len(coord_dims),
+                resolution=self.resolution, center=True, **kwargs
             )
             if segment:
-                mask = self.mask.reshape(-1, *self.mask.shape[3:])
+                mask = self.mask.reshape(-1, *self.mask.shape[len(coord_dims):])
                 mask = self.mask.reshape(mask.shape[0], -1)
                 self.m = (mask > 0).all(axis=1)
 
             if verbose:
-                print(f'x shape = {self.x.shape}\nu shape = {self.u.shape}')
+                print(f'x shape = {self.x.shape}')
+                print(f'u shape = {self.u.shape}')
+                if segment:
+                    print(f'm shape = {self.m.shape}')
 
         if verbose:
             print(f'Data set initialized')
