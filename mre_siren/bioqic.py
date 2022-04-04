@@ -149,19 +149,8 @@ class BIOQICDataset(torch.utils.data.Dataset):
                 print(f'Selecting data subset {select}')
             self.ds = self.ds.sel(select)
 
-        # temporal upsampling
-        if upsample is not None and upsample > 1:
-            if verbose:
-                print(f'Temporal upsampling by factor {upsample}')
-            t = nd_coords(
-                shape=(upsample*self.ds.dims['t'],),
-                extent=1,
-                center=False
-            )
-            self.ds = self.ds.interp(t=t)
-
         # spatial downsampling
-        if downsample is not None and downsample > 1:
+        if downsample is not None and downsample != 1:
             if verbose:
                 print(f'Spatial downsampling by factor {downsample}')
             k = downsample
@@ -191,6 +180,7 @@ class BIOQICDataset(torch.utils.data.Dataset):
 
         self.magnitude = self.ds['magnitude'].to_numpy()
         self.wave = self.ds[wave_var].to_numpy()
+        self.laplace_wave = self.ds[f'laplace_{self.wave_var}'].to_numpy()
         if segment:
             self.mask = self.ds['mask'].to_numpy()
 
@@ -220,6 +210,7 @@ class BIOQICDataset(torch.utils.data.Dataset):
 
             self.magnitude = self.magnitude.transpose(self.permutation)
             self.wave = self.wave.transpose(self.permutation)
+            self.laplace_wave = self.laplace_wave.transpose(self.permutation)
             if segment:
                 self.mask = self.mask.transpose(self.permutation)
             self.resolution = self.resolution[self.permutation]
@@ -227,6 +218,10 @@ class BIOQICDataset(torch.utils.data.Dataset):
             # get the nd coordinates and values
             self.x, self.u, = as_nd_coords(
                 self.wave, n=len(coord_dims),
+                resolution=self.resolution, center=True, **kwargs
+            )
+            _, self.Lu =  as_nd_coords(
+                self.laplace_wave, n=len(coord_dims),
                 resolution=self.resolution, center=True, **kwargs
             )
             if segment:
@@ -237,6 +232,7 @@ class BIOQICDataset(torch.utils.data.Dataset):
             if verbose:
                 print(f'x shape = {self.x.shape}')
                 print(f'u shape = {self.u.shape}')
+                print(f'Lu shape = {self.Lu.shape}')
                 if segment:
                     print(f'm shape = {self.m.shape}')
 
@@ -293,7 +289,7 @@ class BIOQICDataset(torch.utils.data.Dataset):
         return hv.Layout(hv_images).cols(n_cols)
 
     def __getitem__(self, idx):
-        return self.x[idx], self.u[idx], self.m[idx]
+        return self.x[idx], self.u[idx], self.Lu[idx], self.m[idx]
 
     def __len__(self):
         return len(self.x)
