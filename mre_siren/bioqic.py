@@ -102,7 +102,7 @@ class BIOQICDataset(torch.utils.data.Dataset):
         segment=True,
         invert=False,
         make_coords=True,
-        select=None,
+        frequency=None,
         upsample=None,
         downsample=None,
         verbose=False,
@@ -144,10 +144,10 @@ class BIOQICDataset(torch.utils.data.Dataset):
             ).astype(int)
             self.ds['mask'] = (self.ds.dims, mask)
 
-        if select is not None:
+        if frequency is not None and frequency != 'all':
             if verbose:
-                print(f'Selecting data subset {select}')
-            self.ds = self.ds.sel(select)
+                print(f'Selecting frequency {frequency}')
+            self.ds = self.ds.sel(dict(frequency=frequency))
 
         # spatial downsampling
         if downsample is not None and downsample != 1:

@@ -48,7 +48,7 @@ def jacobian(y, x):
     return jac
 
 
-def divergence(y, x):
+def divergence(y, x, start_dim=0):
     '''
     Args:
         y: (N, K) tensor of outputs.
@@ -63,13 +63,13 @@ def divergence(y, x):
     jac = jacobian(y, x)
     assert jac.shape == (N, K, K), jac.shape
     div = 0
-    for j in range(K):
+    for j in range(start_dim, K):
         # divergence is the trace of the Jacobian
         div = div + jac[:,j,j]
     return div
 
 
-def laplacian(y, x):
+def laplacian(y, x, start_dim=0):
     '''
     Args:
         y: (N, M) tensor of outputs.
@@ -89,7 +89,7 @@ def laplacian(y, x):
     for j in range(M):
         # the Laplacian is the divergence of the gradient
         #   i.e. lap_ij = sum_k d^2 y_ij / dx_ik^2
-        lap.append(divergence(jac[:,j,:], x))
+        lap.append(divergence(jac[:,j,:], x, start_dim))
     return torch.stack(lap, dim=1).reshape(*shape)
 
 

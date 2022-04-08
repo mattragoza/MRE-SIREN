@@ -70,17 +70,16 @@ class SIREN(nn.Sequential):
             with torch.no_grad():
                 m.linear.weight.uniform_(-w_std, w_std)
 
-                if i == 0:
+                if i == 0: # map from centered input to [-1, 1]
                     m.linear.weight /= torch.as_tensor(
                         input_scale, device=m.linear.weight.device
                     ).unsqueeze(0)
 
-                if i + 1 == len(self):
+                if i + 1 == len(self): # map from standard normal to output
                     m.linear.weight *= torch.as_tensor(
                         output_scale, device=m.linear.weight.device
                     ).unsqueeze(1)
                     m.linear.bias[...] = output_loc
-
 
     def forward(self, x):
         x = super().forward(x)
