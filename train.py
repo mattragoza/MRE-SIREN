@@ -12,7 +12,9 @@ import mre_siren
 
 def test(out_prefix, data, batch_size, u_model):
 
-    print(f'Evaluating test data ({len(data)//batch_size} batches)')
+    n_batches = len(data)//batch_size
+    print(f'Evaluating test data ({n_batches} batches)')
+
     x = []
     u_pred = []
     Lu_pred = []
@@ -34,6 +36,8 @@ def test(out_prefix, data, batch_size, u_model):
         
         print('.', end='', flush=sys.stdout.isatty())
         if batch % 100 == 0:
+            print(batch, flush=True)
+        elif batch == n_batches:
             print(batch, flush=True)
 
     # concatenate batches
@@ -104,9 +108,9 @@ def train(
     init_lr,
     n_iters,
     weight_decay=0,
-    test_interval=1000,
     print_interval=10,
-    save_interval=1000
+    test_interval=5000,
+    save_interval=5000
 ):
     print('Loading training data')
     train_data = mre_siren.bioqic.BIOQICDataset(
@@ -123,16 +127,16 @@ def train(
         verbose=True
     )
 
-    print('Loading test data')
-    test_data = mre_siren.bioqic.BIOQICDataset(
+    print('Loading downsampled data')
+    down_data = mre_siren.bioqic.BIOQICDataset(
         data_root,
         mat_base='phantom_wave_shear.mat',
         phase_shift=True,
         segment=True,
         invert=True,
         make_coords=True,
-        downsample=None,
-        frequency=None,
+        downsample=2*downsample,
+        frequency=frequency,
         dtype=torch.float32,
         device='cuda',
         verbose=True
@@ -204,13 +208,14 @@ def train(
 
             if iteration % print_interval == 0 or iteration == n_iters:
                 m = metrics.loc[iteration]
-                print(f'[iteration {iteration} epoch {epoch} batch {batch}] u_mse_loss = {m.u_mse_loss:.4e}, Lu_mse_loss = {m.Lu_mse_loss:.4e}, u_pred_norm = {m.u_pred_norm:.4e}, Lu_pred_norm = {m.Lu_pred_norm:.4e}')
+                print(f'[iteration {iteration} epoch {epoch} batch {batch}] u_mse_loss = {m.u_mse_loss:.4e} Lu_mse_loss = {m.Lu_mse_loss:.4e} u_pred_norm = {m.u_pred_norm:.4e} Lu_pred_norm = {m.Lu_pred_norm:.4e}')
 
                 metrics_file = f'{out_prefix}.metrics'
                 metrics.to_csv(metrics_file, sep=' ', float_format='%.4f')
 
             if iteration % test_interval == 0 or iteration == n_iters:
-                test(out_prefix, test_data, batch_size, u_model)
+                test_prefix = f'{out_prefix}_{iteration}_down'
+                test(test_prefix, down_data, batch_size, u_model)
 
             if iteration == n_iters:
                 break
@@ -238,6 +243,25 @@ def train(
 
         # end of epoch
         epoch += 1
+
+    del train_data, down_data
+
+    print('Loading full-resolution data')
+    full_data = mre_siren.bioqic.BIOQICDataset(
+        data_root,
+        mat_base='phantom_wave_shear.mat',
+        phase_shift=True,
+        segment=True,
+        invert=True,
+        make_coords=True,
+        downsample=1,
+        frequency=frequency,
+        dtype=torch.float32,
+        device='cuda',
+        verbose=True
+    )
+    test_prefix = f'{out_prefix}_{iteration}_full'
+    test(test_prefix, full_data, batch_size, u_model)
 
     print('Done')
 
