@@ -8,6 +8,7 @@ dependencies:
   - python
   - numpy
   - scipy
+  - scikit-image
   - pandas
   - nvidia::cudatoolkit=10.2
   - pytorch::pytorch
