@@ -101,6 +101,7 @@ class BIOQICDataset(torch.utils.data.Dataset):
         phase_shift=False,
         segment=True,
         invert=False,
+        invert_kws={},
         make_coords=True,
         frequency=None,
         upsample=None,
@@ -162,7 +163,8 @@ class BIOQICDataset(torch.utils.data.Dataset):
             if verbose:
                 print('Performing discrete Laplace inversion')
             laplace_wave, abs_G, phi_G = phase.laplace_invert(
-                self.ds[self.wave_var], self.ds.coords['frequency']
+                self.ds[self.wave_var], self.ds.coords['frequency'],
+                **invert_kws
             )
             self.ds[f'laplace_{self.wave_var}'] = (self.ds.dims, laplace_wave)
             self.ds['abs_G'] = abs_G

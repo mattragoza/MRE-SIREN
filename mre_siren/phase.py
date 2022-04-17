@@ -163,15 +163,15 @@ def radial_filter(wave, resolution=0.0015, threshold=100, order=1, use_z=False):
 
 
 def laplace_inversion(
-    wave, frequency, resolution=0.0015, density=1000, eps=1e-8
+    wave, frequency, resolution=0.0015, density=1000, eps=1e-8, use_z=False
 ):
     n_freq, n_MEG, n_grad, n_z, n_x, n_y = wave.shape
     
     strain = wave[0,0,0].real * 0
-    numer_phi = strain.copy()
-    denom_phi = strain.copy()
-    numer_absG = strain.copy()
-    denom_absG = strain.copy()
+    numer_abs_G = strain.copy()
+    denom_abs_G = strain.copy()
+    numer_cos_G = strain.copy()
+    denom_cos_G = strain.copy()
    
     # iterate over 3D volumes
     for f in range(n_freq):
@@ -179,35 +179,43 @@ def laplace_inversion(
             for g in range(n_grad):
 
                 u = wave[f,m,g]
-                u_z,  u_x,  u_y  = np.gradient(u,   resolution)
-                u_zz, u_zx, u_zy = np.gradient(u_z, resolution)
+                u_z, u_x, u_y = np.gradient(u, resolution)
                 u_xz, u_xx, u_xy = np.gradient(u_x, resolution)
                 u_yz, u_yx, u_yy = np.gradient(u_y, resolution)
-                laplace_u = u_xx + u_yy #+ u_zz
+                if use_z:
+                    u_zz, u_zx, u_zy = np.gradient(u_z, resolution)
+                    laplace_u = u_xx + u_yy + u_zz
+                else:
+                    laplace_u = u_xx + u_yy
+
+                numer_cos_G += -(laplace_u.real*u.real + laplace_u.imag*u.imag)
+                denom_cos_G += np.abs(laplace_u) * np.abs(u)
                 
-                numer_phi += laplace_u.real * u.real + laplace_u.imag * u.imag
-                denom_phi += np.abs(laplace_u) * np.abs(u)
-                
-                numer_absG += density * (2*np.pi * frequency[f])**2 * np.abs(u)
-                denom_absG += np.abs(laplace_u)
+                numer_abs_G += density * (2*np.pi * frequency[f])**2 * np.abs(u)
+                denom_abs_G += np.abs(laplace_u)
                 
                 strain += np.abs(u)
     
-    phi = np.arccos(-numer_phi/(denom_phi + eps))
-    absG = numer_absG / (denom_absG + eps)
+    abs_G = numer_abs_G / (denom_abs_G + eps)
+    cos_G = numer_cos_G / (denom_cos_G + eps)
+    phi_G = np.arccos(cos_G)
 
-    return absG, phi, strain
+    return abs_G, phi_G, strain
 
 
 def laplace_invert(
-    u, frequency, resolution=0.0015, density=1000, eps=1e-8
+    u, frequency, resolution=0.0015, density=1000, eps=1e-8, use_z=False
 ):
+    print(f'use_z = {use_z}')
     # assume last three dimensions are z, x, y
-    u_z,  u_x,  u_y  = np.gradient(u,   resolution, axis=(-3,-2,-1))
-    u_zz, u_zx, u_zy = np.gradient(u_z, resolution, axis=(-3,-2,-1))
+    u_z, u_x, u_y = np.gradient(u, resolution, axis=(-3,-2,-1))
     u_xz, u_xx, u_xy = np.gradient(u_x, resolution, axis=(-3,-2,-1))
     u_yz, u_yx, u_yy = np.gradient(u_y, resolution, axis=(-3,-2,-1))
-    laplace_u = u_xx + u_yy #+ u_zz
+    if use_z:
+        u_zz, u_zx, u_zy = np.gradient(u_z, resolution, axis=(-3,-2,-1))
+        laplace_u = u_xx + u_yy + u_zz
+    else:
+        laplace_u = u_xx + u_yy
 
     # solve for the complex shear modulus
     numer_abs_G = density * (2*np.pi * frequency)**2 * np.abs(u)
@@ -217,8 +225,8 @@ def laplace_invert(
     denom_cos_G = np.abs(laplace_u) * np.abs(u)
     
     axes = tuple(range(u.ndim-3))
-    abs_G = numer_abs_G.sum(axis=axes) / denom_abs_G.sum(axis=axes)
-    cos_G = numer_cos_G.sum(axis=axes) / denom_cos_G.sum(axis=axes)
+    abs_G = numer_abs_G.sum(axis=axes) / (denom_abs_G.sum(axis=axes) + eps)
+    cos_G = numer_cos_G.sum(axis=axes) / (denom_cos_G.sum(axis=axes) + eps)
     phi_G = np.arccos(cos_G)
 
     return laplace_u, abs_G, phi_G

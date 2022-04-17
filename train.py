@@ -10,7 +10,7 @@ import pandas as pd
 import mre_siren
 
 
-def test(out_prefix, data, batch_size, u_model):
+def test(out_prefix, data, batch_size, u_model, laplace_dim):
 
     n_batches = len(data)//batch_size
     print(f'Evaluating test data ({n_batches} batches)')
@@ -24,7 +24,7 @@ def test(out_prefix, data, batch_size, u_model):
         # forward pass
         x_.requires_grad = True
         u_pred_ = u_model.forward(x_)
-        Lu_pred_ = mre_siren.pde.laplacian(u_pred_, x_, start_dim=1)
+        Lu_pred_ = mre_siren.pde.laplacian(u_pred_, x_, start_dim=laplace_dim)
 
         x.append(x_.detach())
         u_pred.append(u_pred_.detach())
@@ -54,7 +54,7 @@ def test(out_prefix, data, batch_size, u_model):
     Lu_pred = Lu_pred.reshape(data.wave.shape).detach()
 
     # continuous Laplace inversion
-    print('Continuous Laplace inversion')
+    print('Performing continuous Laplace inversion')
     density = 1000
     frequency = torch.tensor(
         data.ds.coords['frequency'].to_numpy(), device=u_pred.device
@@ -107,11 +107,14 @@ def train(
     sine_w0,
     init_lr,
     n_iters,
+    laplace_z=True,
     weight_decay=0,
     print_interval=10,
     test_interval=5000,
     save_interval=5000
 ):
+    laplace_z = bool(laplace_z)
+
     print('Loading training data')
     train_data = mre_siren.bioqic.BIOQICDataset(
         data_root,
@@ -119,6 +122,7 @@ def train(
         phase_shift=True,
         segment=True,
         invert=True,
+        invert_kws=dict(use_z=laplace_z),
         make_coords=True,
         downsample=downsample,
         frequency=frequency,
@@ -134,6 +138,7 @@ def train(
         phase_shift=True,
         segment=True,
         invert=True,
+        invert_kws=dict(use_z=laplace_z),
         make_coords=True,
         downsample=2*downsample,
         frequency=frequency,
@@ -173,8 +178,12 @@ def train(
         u_model.parameters(), lr=init_lr, weight_decay=weight_decay
     )
 
-    columns = ['iteration', 'epoch', 'batch']
-    metrics = pd.DataFrame(columns=columns).set_index('iteration')
+    metrics = pd.DataFrame(columns=['iteration', 'epoch', 'batch', 'freq'])
+    metrics.set_index(['iteration', 'freq'], inplace=True)
+
+    freqs = train_data.ds.coords['frequency'].to_numpy()
+    freq_coords = train_data.x[:,0].unique()
+    laplace_dim = 1 if laplace_z else 2
 
     print('Start training loop')
     epoch = 0
@@ -190,24 +199,40 @@ def train(
             u_pred = u_model.forward(x)
             u_mse_loss = F.mse_loss(u, u_pred)
 
-            Lu_pred = mre_siren.pde.laplacian(u_pred, x, start_dim=1)
+            Lu_pred = mre_siren.pde.laplacian(u_pred, x, start_dim=laplace_dim)
             with torch.no_grad(): # just for monitoring
                 Lu_mse_loss = F.mse_loss(Lu, Lu_pred)
             
-            # record loss metrics
-            metrics.loc[iteration, 'epoch'] = epoch
-            metrics.loc[iteration, 'batch'] = batch
-            metrics.loc[iteration, 'u_mse_loss'] = u_mse_loss.item()
-            metrics.loc[iteration, 'Lu_mse_loss'] = Lu_mse_loss.item()
-            metrics.loc[iteration, 'u_pred_norm'] = torch.linalg.norm(
-                torch.flatten(u_pred, start_dim=1), dim=1
-            ).mean().item()
-            metrics.loc[iteration, 'Lu_pred_norm'] = torch.linalg.norm(
-                torch.flatten(Lu_pred, start_dim=1), dim=1
-            ).mean().item()
+            # compute and record metrics by frequency
+            for freq, freq_coord in zip(freqs, freq_coords):
+                assert x.shape[1] == 4, x.shape
+
+                # get frequency mask
+                f = (x[:,0] == freq_coord)
+                if len(f) == 0:
+                    continue
+
+                with torch.no_grad(): # compute metrics
+                    f_u_mse_loss = F.mse_loss(u[f], u_pred[f]).item()
+                    f_Lu_mse_loss = F.mse_loss(Lu[f], Lu_pred[f]).item()
+                    f_u_pred_norm = torch.linalg.norm(
+                        torch.flatten(u_pred[f], start_dim=1), dim=1
+                    ).mean().item()
+                    f_Lu_pred_norm = torch.linalg.norm(
+                        torch.flatten(Lu_pred[f], start_dim=1), dim=1
+                    ).mean().item()
+
+                # record metrics
+                idx = (iteration, freq)
+                metrics.loc[idx, 'epoch'] = epoch
+                metrics.loc[idx, 'batch'] = batch
+                metrics.loc[idx, 'u_mse_loss'] = f_u_mse_loss
+                metrics.loc[idx, 'Lu_mse_loss'] = f_Lu_mse_loss
+                metrics.loc[idx, 'u_pred_norm'] = f_u_pred_norm
+                metrics.loc[idx, 'Lu_pred_norm'] = f_Lu_pred_norm
 
             if iteration % print_interval == 0 or iteration == n_iters:
-                m = metrics.loc[iteration]
+                m = metrics.loc[iteration].mean() # mean across frqeuencies
                 print(f'[iteration {iteration} epoch {epoch} batch {batch}] u_mse_loss = {m.u_mse_loss:.4e} Lu_mse_loss = {m.Lu_mse_loss:.4e} u_pred_norm = {m.u_pred_norm:.4e} Lu_pred_norm = {m.Lu_pred_norm:.4e}')
 
                 metrics_file = f'{out_prefix}.metrics'
@@ -215,7 +240,7 @@ def train(
 
             if iteration % test_interval == 0 or iteration == n_iters:
                 test_prefix = f'{out_prefix}_{iteration}_down'
-                test(test_prefix, down_data, batch_size, u_model)
+                test(test_prefix, down_data, batch_size, u_model, laplace_dim)
 
             if iteration == n_iters:
                 break
@@ -253,6 +278,7 @@ def train(
         phase_shift=True,
         segment=True,
         invert=True,
+        invert_kws=dict(use_z=laplace_z),
         make_coords=True,
         downsample=1,
         frequency=frequency,
@@ -261,7 +287,7 @@ def train(
         verbose=True
     )
     test_prefix = f'{out_prefix}_{iteration}_full'
-    test(test_prefix, full_data, batch_size, u_model)
+    test(test_prefix, full_data, batch_size, u_model, laplace_dim)
 
     print('Done')
 
