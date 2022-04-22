@@ -1,4 +1,4 @@
-import sys
+import sys, glob, re
 import numpy as np
 nax = np.newaxis
 import torch
@@ -8,6 +8,23 @@ from torch import optim
 import pandas as pd
 
 import mre_siren
+
+
+def find_last_iter(out_prefix):
+
+    last_iter = -1
+    state_pat = re.escape(out_prefix) + r'_(\d+)\.checkpoint'
+    state_re = re.compile(state_pat)
+
+    for f in glob.glob(f'{out_prefix}_*.checkpoint'):
+        i = int(state_re.match(f).group(1))
+        if i > last_iter:
+            last_iter = i
+
+    if last_iter < 0:
+        raise FileNotFoundError('could not find state file')
+    
+    return last_iter
 
 
 def test(out_prefix, data, batch_size, u_model, laplace_dim):
@@ -111,7 +128,8 @@ def train(
     weight_decay=0,
     print_interval=10,
     test_interval=5000,
-    save_interval=5000
+    save_interval=5000,
+    resume=False,
 ):
     laplace_z = bool(laplace_z)
 
@@ -178,17 +196,31 @@ def train(
         u_model.parameters(), lr=init_lr, weight_decay=weight_decay
     )
 
-    metrics = pd.DataFrame(columns=['iteration', 'epoch', 'batch', 'freq'])
-    metrics.set_index(['iteration', 'freq'], inplace=True)
+    metrics_file = f'{out_prefix}.metrics'
+    if resume:
+        iteration = find_last_iter(out_prefix)
+        print(f'Loading checkpoint {iteration}')
 
+        state_file = f'{out_prefix}_{iteration}.checkpoint'
+        state = torch.load(state_file)
+        u_model.load_state_dict(state['u_model_state'])
+        u_optimizer.load_state_dict(state['u_optimizer_state'])
+
+        print(f'Loading {metrics_file}')
+        epoch = state['epoch']
+        metrics = pd.read_csv(metrics_file, sep=' ')
+    else:
+        epoch = 0
+        iteration = 0
+        metrics = pd.DataFrame(columns=['iteration', 'epoch', 'batch', 'freq'])
+    
+    metrics.set_index(['iteration', 'freq'], inplace=True)
     freqs = train_data.ds.coords['frequency'].to_numpy()
     freq_coords = train_data.x[:,0].unique()
     laplace_dim = 1 if laplace_z else 2
 
     print('Start training loop')
-    epoch = 0
-    iteration = 0
-    while True:
+    while iteration <= n_iters:
         for batch, (x, u, Lu, m) in enumerate(data_loader):
 
             # only train on segmented region
@@ -235,7 +267,6 @@ def train(
                 m = metrics.loc[iteration].mean() # mean across frqeuencies
                 print(f'[iteration {iteration} epoch {epoch} batch {batch}] u_mse_loss = {m.u_mse_loss:.4e} Lu_mse_loss = {m.Lu_mse_loss:.4e} u_pred_norm = {m.u_pred_norm:.4e} Lu_pred_norm = {m.Lu_pred_norm:.4e}')
 
-                metrics_file = f'{out_prefix}.metrics'
                 metrics.to_csv(metrics_file, sep=' ', float_format='%.4f')
 
             if iteration % test_interval == 0 or iteration == n_iters:
