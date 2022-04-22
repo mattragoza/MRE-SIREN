@@ -150,6 +150,24 @@ class BIOQICDataset(torch.utils.data.Dataset):
                 print(f'Selecting frequency {frequency}')
             self.ds = self.ds.sel(dict(frequency=frequency))
 
+        # frequency upsampling
+        if upsample is not None and upsample != 1:
+            if verbose:
+                print(f'Frequency upsampling by factor {upsample}')
+
+            # get the interpolated frequencies
+            f_old = self.ds.coords['frequency']
+            n_freq = len(f_old)
+            x_old = np.arange(0, n_freq)
+            x_new = np.arange(0, n_freq-1 + 1/upsample, 1/upsample)
+            f_new = np.interp(x_new, x_old, f_old)
+
+            # need to reindex so dims are same order
+            new_coords = dict(self.ds.coords)
+            new_coords['frequency'] = f_new
+
+            self.ds = self.ds.interp(frequency=f_new).reindex(new_coords)
+
         # spatial downsampling
         if downsample is not None and downsample != 1:
             if verbose:

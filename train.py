@@ -319,6 +319,30 @@ def train(
     )
     test_prefix = f'{out_prefix}_{iteration}_full'
     test(test_prefix, full_data, batch_size, u_model, laplace_dim)
+    del full_data
+
+    if frequency == 'all':
+
+        for upsample in [2, 4]:
+
+            print('Creating super-frequency data')
+            super_data = mre_siren.bioqic.BIOQICDataset(
+                data_root,
+                mat_base='phantom_wave_shear.mat',
+                phase_shift=True,
+                segment=True,
+                invert=True,
+                invert_kws=dict(use_z=laplace_z),
+                make_coords=True,
+                downsample=1,
+                upsample=upsample,
+                frequency=frequency,
+                dtype=torch.float32,
+                device='cuda',
+                verbose=True
+            )
+            test_prefix = f'{out_prefix}_{iteration}_super{upsample}'
+            test(test_prefix, super_data, batch_size, u_model, laplace_dim)
 
     print('Done')
 
