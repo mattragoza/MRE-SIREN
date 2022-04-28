@@ -203,10 +203,9 @@ def laplace_inversion(
     return abs_G, phi_G, strain
 
 
-def laplace_invert(
-    u, frequency, resolution=0.0015, density=1000, eps=1e-8, use_z=False
-):
+def laplacian(u, resolution=0.0015, use_z=False):
     print(f'use_z = {use_z}')
+
     # assume last three dimensions are z, x, y
     u_z, u_x, u_y = np.gradient(u, resolution, axis=(-3,-2,-1))
     u_xz, u_xx, u_xy = np.gradient(u_x, resolution, axis=(-3,-2,-1))
@@ -216,17 +215,53 @@ def laplace_invert(
         laplace_u = u_xx + u_yy + u_zz
     else:
         laplace_u = u_xx + u_yy
+    return laplace_u
 
-    # solve for the complex shear modulus
-    numer_abs_G = density * (2*np.pi * frequency)**2 * np.abs(u)
-    denom_abs_G = np.abs(laplace_u)
 
-    numer_cos_G = -(laplace_u.real * u.real + laplace_u.imag * u.imag)
-    denom_cos_G = np.abs(laplace_u) * np.abs(u)
-    
-    axes = tuple(range(u.ndim-3))
-    abs_G = numer_abs_G.sum(axis=axes) / (denom_abs_G.sum(axis=axes) + eps)
-    cos_G = numer_cos_G.sum(axis=axes) / (denom_cos_G.sum(axis=axes) + eps)
-    phi_G = np.arccos(cos_G)
+def laplace_invert(
+    u, Lu, frequency, rho=1000, eps=1e-8
+):
+    assert frequency.ndim == 1, frequency.shape   
+    n_freq = len(frequency)
 
-    return laplace_u, abs_G, phi_G
+    assert u.ndim >= 4, u.shape
+    assert u.shape[0] == n_freq, (u.shape, n_freq)
+    assert Lu.shape == u.shape, (Lu.shape, u.shape)
+
+    n_non_spatial_dims = len(u.shape) - 3
+    xyz_shape = u.shape[-3:]
+    n_xyz = np.prod(xyz_shape)
+
+    # reshape as frequency, other, spatial
+    u = u.reshape(n_freq, -1, n_xyz)
+    Lu = Lu.reshape(n_freq, -1, n_xyz)
+    frequency = frequency.reshape(n_freq, 1, 1)
+
+    # magnitude of displacement and Laplacian
+    abs_u = np.abs(u)
+    abs_Lu = np.abs(Lu)
+
+    # numerator and denominator of powerlaw exponent
+    numer_phi_G = (Lu.real * u.real + Lu.imag * u.imag)
+    denom_phi_G = (abs_Lu * abs_u)
+
+    # sum across non-spatial dims (i.e. frequency and other)
+    numer_phi_G = numer_phi_G.sum(axis=(0,1), keepdims=True)
+    denom_phi_G = denom_phi_G.sum(axis=(0,1), keepdims=True)
+
+    phi_G = np.arccos(-numer_phi_G / (denom_phi_G + eps))
+
+    # numerator and denominator of shear elasticity
+    numer_abs_G = rho * (2*np.pi * frequency)**2 * abs_u
+    denom_abs_G = abs_Lu
+
+    # sum across non-spatial dims
+    numer_abs_G = numer_abs_G.sum(axis=(0,1))
+    denom_abs_G = denom_abs_G.sum(axis=(0,1))
+
+    abs_G = numer_abs_G / (denom_abs_G + eps)
+
+    # reshape to original dimensions
+    phi_G = phi_G.reshape(xyz_shape)
+    abs_G = abs_G.reshape(xyz_shape)
+    return abs_G, phi_G

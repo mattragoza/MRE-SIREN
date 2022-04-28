@@ -180,13 +180,15 @@ class BIOQICDataset(torch.utils.data.Dataset):
         if invert: # perform Laplace inversion
             if verbose:
                 print('Performing discrete Laplace inversion')
-            laplace_wave, abs_G, phi_G = phase.laplace_invert(
-                self.ds[self.wave_var], self.ds.coords['frequency'],
-                **invert_kws
+            wave = self.ds[self.wave_var].to_numpy()
+            laplace_wave = phase.laplacian(wave, **invert_kws)
+            freqs = self.ds.coords['frequency'].to_numpy()
+            abs_G, phi_G = phase.laplace_invert(wave, laplace_wave, freqs)
+            self.ds[f'laplace_{self.wave_var}_MDEV'] = (
+                self.ds.dims, laplace_wave
             )
-            self.ds[f'laplace_{self.wave_var}'] = (self.ds.dims, laplace_wave)
-            self.ds['abs_G'] = abs_G
-            self.ds['phi_G'] = phi_G
+            self.ds['abs_G_MDEV'] = (['z','x','y'], abs_G)
+            self.ds['phi_G_MDEV'] = (['z','x','y'], phi_G)
 
         # reorder the columns
         for var in list(self.ds.keys()):
@@ -200,7 +202,7 @@ class BIOQICDataset(torch.utils.data.Dataset):
 
         self.magnitude = self.ds['magnitude'].to_numpy()
         self.wave = self.ds[wave_var].to_numpy()
-        self.laplace_wave = self.ds[f'laplace_{self.wave_var}'].to_numpy()
+        self.laplace_wave = self.ds[f'laplace_{self.wave_var}_MDEV'].to_numpy()
         if segment:
             self.mask = self.ds['mask'].to_numpy()
 
@@ -275,6 +277,8 @@ class BIOQICDataset(torch.utils.data.Dataset):
 
             if 'wave' in v or 'phase' in v:
                 cmap = phase_color_map()
+            elif 'abs_G' in v or 'phi' in v or 'alpha' in v or 'mu' in v:
+                cmap = elast_color_map()
             else:
                 cmap = magnitude_color_map()
             v_min = v_max = None
@@ -282,7 +286,7 @@ class BIOQICDataset(torch.utils.data.Dataset):
             if np.iscomplexobj(self.ds[v]):
                 if 'elast' in v:
                     funcs = [np.absolute, xr.ufuncs.angle]
-                    cmap = [magnitude_color_map(), magnitude_color_map()]
+                    cmap = [cmap, cmap]
                     share_vlim = False
                 else:
                     funcs = [np.real, np.imag]
@@ -440,7 +444,11 @@ def magnitude_color_map():
     '''
     Create a linear grayscale colormap.
     '''
-    colors = [(0,0,0), (1,1,1)]
+    black = (0, 0, 0)
+    white = (1, 1, 1)
+
+    colors = [black, white]
+
     return mpl.colors.LinearSegmentedColormap.from_list(
         name='magnitude', colors=colors, N=255
     )
@@ -451,9 +459,63 @@ def phase_color_map():
     Create a colormap for MRE wave images
     from yellow, red, black, blue, to cyan.
     '''
-    colors = [(1,1,0), (1,0,0), (0,0,0), (0,0,1), (0,1,1)]
+    cyan   = (0, 1, 1)
+    blue   = (0, 0, 1)
+    black  = (0, 0, 0)
+    red    = (1, 0, 0)
+    yellow = (1, 1, 0)
+
+    colors = [cyan, blue, black, red, yellow]
+
     return mpl.colors.LinearSegmentedColormap.from_list(
         name='wave', colors=colors, N=255
+    )
+
+
+def elast_color_map():
+    '''
+    Create a colormap for MRE elastrograms
+    from dark, blue, cyan, green, yellow, to red.
+    '''
+    p = 0.0
+    c = 0.6
+    y = 0.9
+    g = 0.8
+
+    dark = (p, 0, p)
+    blue   = (0, 0, 1)
+    cyan   = (0, c, 1)
+    green  = (0, g, 0)
+    yellow = (1, y, 0)
+    red    = (1, 0, 0)
+
+    colors = [dark, blue, cyan, green, yellow, red]
+
+    return mpl.colors.LinearSegmentedColormap.from_list(
+        name='wave', colors=colors, N=255
+    )
+
+
+def mask_color_map():
+    '''
+    Create a colormap for MRE elastrograms
+    from dark, blue, cyan, green, yellow, to red.
+    '''
+    w = 1.0
+    g = 0.8
+    y = 0.9
+
+    black  = (0, 0, 0)
+    gray   = (w, w, w)
+    red    = (1, 0, 0)
+    yellow = (1, y, 0)
+    green  = (0, g, 0)
+    blue   = (0, 0, 1)
+
+    colors = [black, gray, red, yellow, green, blue]
+
+    return mpl.colors.LinearSegmentedColormap.from_list(
+        name='wave', colors=colors, N=6
     )
 
 
@@ -492,26 +554,26 @@ def view_xarray(
     data = ds[var]
     var_label = var
 
-    ref_var = None
+    ref_var = var
     if share: # determine reference variable
-        if var.startswith('my_'):
-            ref_var = var[3:]
-        elif var.endswith('_pred'):
+        if var.endswith('_pred'):
             ref_var = var[:-5]
-    if ref_var:
-        ref_data = ds[ref_var]
+        elif var.endswith('_MDEV'):
+            ref_var = var[:-5]
+    
+    ref_data = ds[ref_var]
 
     if func is not None: # apply function to data
         data = func(data)
         var_label = f'{func.__name__}({var})'
-        if ref_var:
+        if ref_var != var:
             ref_data = func(ref_data)
 
     # infer value range from data or reference data
     if v_min is None:
-        v_min = np.percentile(ref_data if ref_var else data, pct)
+        v_min = np.percentile(ref_data, pct)
     if v_max is None:
-        v_max = np.percentile(ref_data if ref_var else data, 100-pct)
+        v_max = np.percentile(ref_data, 100-pct)
 
     print(var, ref_var, func, v_min, v_max)
 
